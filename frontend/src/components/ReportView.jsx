@@ -93,6 +93,9 @@ const styles = {
   issueAttribute: {
     borderLeft: '4px solid #17a2b8',
   },
+  issueIntegrity: {
+    borderLeft: '4px solid #6f42c1',
+  },
   issueName: {
     fontWeight: '600',
     marginBottom: '4px',
@@ -150,6 +153,65 @@ const styles = {
     overflow: 'auto',
     maxHeight: '300px',
   },
+  umlClass: {
+    backgroundColor: '#fff',
+    border: '1px solid #333',
+    borderRadius: '4px',
+    marginBottom: '12px',
+    overflow: 'hidden',
+  },
+  umlClassName: {
+    backgroundColor: '#333',
+    color: '#fff',
+    padding: '8px 12px',
+    fontWeight: '600',
+    textAlign: 'center',
+  },
+  umlAttributes: {
+    padding: '8px 12px',
+    borderBottom: '1px solid #ddd',
+    fontSize: '13px',
+    fontFamily: 'monospace',
+  },
+  umlAttribute: {
+    padding: '2px 0',
+  },
+  umlKey: {
+    fontSize: '10px',
+    padding: '1px 4px',
+    borderRadius: '2px',
+    marginLeft: '6px',
+  },
+  umlPK: {
+    backgroundColor: '#ffc107',
+    color: '#333',
+  },
+  umlFK: {
+    backgroundColor: '#17a2b8',
+    color: '#fff',
+  },
+  coverageItem: {
+    padding: '10px 12px',
+    backgroundColor: '#fff',
+    borderRadius: '4px',
+    marginBottom: '8px',
+    border: '1px solid #ddd',
+  },
+  coverageFullyCovered: {
+    borderLeft: '4px solid #28a745',
+  },
+  coveragePartiallyCovered: {
+    borderLeft: '4px solid #ffc107',
+  },
+  coverageNotCovered: {
+    borderLeft: '4px solid #dc3545',
+  },
+  coverageStatus: {
+    fontSize: '12px',
+    padding: '2px 6px',
+    borderRadius: '3px',
+    marginLeft: '8px',
+  },
 };
 
 function getScoreColor(score) {
@@ -191,8 +253,114 @@ function IssueList({ title, issues, style, renderItem }) {
   );
 }
 
+function UMLClassDiagram({ umlStructure }) {
+  if (!umlStructure || !umlStructure.classes || umlStructure.classes.length === 0) {
+    return null;
+  }
+
+  return (
+    <div style={styles.section}>
+      <h3 style={styles.sectionTitle}>UML Class Diagram</h3>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(250px, 1fr))', gap: '16px' }}>
+        {umlStructure.classes.map((cls, idx) => (
+          <div key={idx} style={styles.umlClass}>
+            <div style={styles.umlClassName}>{cls.name}</div>
+            <div style={styles.umlAttributes}>
+              {cls.attributes && cls.attributes.length > 0 ? (
+                cls.attributes.map((attr, attrIdx) => (
+                  <div key={attrIdx} style={styles.umlAttribute}>
+                    {attr.visibility === 'private' ? '-' : attr.visibility === 'protected' ? '#' : '+'}
+                    {' '}{attr.name}: {attr.type}
+                    {attr.is_primary_key && <span style={{ ...styles.umlKey, ...styles.umlPK }}>PK</span>}
+                    {attr.is_foreign_key && <span style={{ ...styles.umlKey, ...styles.umlFK }}>FK</span>}
+                  </div>
+                ))
+              ) : (
+                <div style={{ color: '#999', fontStyle: 'italic' }}>No attributes</div>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+      
+      {/* Associations */}
+      {umlStructure.associations && umlStructure.associations.length > 0 && (
+        <div style={{ marginTop: '16px' }}>
+          <strong>Relationships:</strong>
+          <div style={{ marginTop: '8px' }}>
+            {umlStructure.associations.map((assoc, idx) => (
+              <div key={idx} style={{ padding: '6px 0', borderBottom: '1px solid #eee' }}>
+                <strong>{assoc.source}</strong>
+                {' '}{assoc.source_multiplicity}{' '}
+                <span style={{ color: '#666' }}>
+                  —[{assoc.association_type}]—
+                </span>
+                {' '}{assoc.target_multiplicity}{' '}
+                <strong>{assoc.target}</strong>
+                {assoc.label && <span style={{ color: '#666', marginLeft: '8px' }}>({assoc.label})</span>}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <details style={{ marginTop: '16px' }}>
+        <summary style={{ cursor: 'pointer', marginBottom: '8px' }}>
+          View Full UML Structure (JSON)
+        </summary>
+        <pre style={styles.erdStructure}>
+          {JSON.stringify(umlStructure, null, 2)}
+        </pre>
+      </details>
+    </div>
+  );
+}
+
+function UserStoryCoverage({ coverage }) {
+  if (!coverage || coverage.length === 0) return null;
+
+  const getCoverageStyle = (status) => {
+    switch (status) {
+      case 'fully_covered': return styles.coverageFullyCovered;
+      case 'partially_covered': return styles.coveragePartiallyCovered;
+      case 'not_covered': return styles.coverageNotCovered;
+      default: return {};
+    }
+  };
+
+  const getCoverageStatusStyle = (status) => {
+    switch (status) {
+      case 'fully_covered': return { backgroundColor: '#d4edda', color: '#155724' };
+      case 'partially_covered': return { backgroundColor: '#fff3cd', color: '#856404' };
+      case 'not_covered': return { backgroundColor: '#f8d7da', color: '#721c24' };
+      default: return {};
+    }
+  };
+
+  const formatStatus = (status) => {
+    return status.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+  };
+
+  return (
+    <div style={styles.section}>
+      <h3 style={styles.sectionTitle}>User Story Coverage</h3>
+      {coverage.map((item, idx) => (
+        <div key={idx} style={{ ...styles.coverageItem, ...getCoverageStyle(item.coverage_status) }}>
+          <div style={{ marginBottom: '4px' }}>
+            <strong>{item.story_summary}</strong>
+            <span style={{ ...styles.coverageStatus, ...getCoverageStatusStyle(item.coverage_status) }}>
+              {formatStatus(item.coverage_status)}
+            </span>
+          </div>
+          {item.notes && <div style={styles.issueReason}>{item.notes}</div>}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export default function ReportView({ analysis, onBack }) {
-  const { status, extracted_erd, report, error_message } = analysis;
+  const { status, extracted_erd, uml_structure, report, error_message } = analysis;
 
   if (status === 'pending' || status === 'processing') {
     return (
@@ -206,6 +374,9 @@ export default function ReportView({ analysis, onBack }) {
         <div style={styles.loading}>
           <div style={styles.spinner} />
           <p>Analyzing your ERD diagram...</p>
+          <p style={{ fontSize: '14px', color: '#666', marginTop: '8px' }}>
+            This may take a minute for complex diagrams.
+          </p>
           <StatusBadge status={status} />
         </div>
         <style>{`
@@ -234,6 +405,9 @@ export default function ReportView({ analysis, onBack }) {
       </div>
     );
   }
+
+  // Use uml_structure if available (new format), otherwise fall back to extracted_erd (legacy)
+  const structure = uml_structure || extracted_erd;
 
   return (
     <div style={styles.container}>
@@ -267,6 +441,9 @@ export default function ReportView({ analysis, onBack }) {
         </div>
       )}
 
+      {/* User Story Coverage (new) */}
+      <UserStoryCoverage coverage={report?.user_story_coverage} />
+
       {/* Missing Entities */}
       <IssueList
         title="Missing Entities"
@@ -299,6 +476,9 @@ export default function ReportView({ analysis, onBack }) {
             {issue.suggested_type && (
               <small>Suggested type: {issue.suggested_type}</small>
             )}
+            {issue.suggested_multiplicity && (
+              <small style={{ marginLeft: '8px' }}>Multiplicity: {issue.suggested_multiplicity}</small>
+            )}
           </>
         )}
       />
@@ -328,8 +508,27 @@ export default function ReportView({ analysis, onBack }) {
           <>
             <div style={styles.issueName}>
               {issue.entity_name}.{issue.attribute_name}
+              {issue.attribute_type && <span style={{ color: '#666' }}> : {issue.attribute_type}</span>}
             </div>
             <div style={styles.issueReason}>{issue.reason}</div>
+          </>
+        )}
+      />
+
+      {/* Data Integrity Concerns (new) */}
+      <IssueList
+        title="Data Integrity Concerns"
+        issues={report?.data_integrity_concerns}
+        style={styles.issueIntegrity}
+        renderItem={(issue) => (
+          <>
+            <div style={styles.issueName}>{issue.concern}</div>
+            {issue.affected_entities && (
+              <div style={{ marginBottom: '4px' }}>
+                <small>Affected: {issue.affected_entities.join(', ')}</small>
+              </div>
+            )}
+            <div style={styles.issueReason}>{issue.recommendation}</div>
           </>
         )}
       />
@@ -359,8 +558,11 @@ export default function ReportView({ analysis, onBack }) {
         </div>
       )}
 
-      {/* Extracted ERD Structure */}
-      {extracted_erd && (
+      {/* UML Structure (new format) */}
+      {uml_structure && <UMLClassDiagram umlStructure={uml_structure} />}
+
+      {/* Legacy ERD Structure (fallback) */}
+      {!uml_structure && extracted_erd && (
         <div style={styles.section}>
           <h3 style={styles.sectionTitle}>Extracted ERD Structure</h3>
           {extracted_erd.entities && (
