@@ -4,17 +4,19 @@ import uuid
 from pathlib import Path
 from typing import List, Optional
 
+from dotenv import load_dotenv
+load_dotenv()  # Load .env BEFORE importing local modules that use env vars
+
 from fastapi import FastAPI, File, Form, UploadFile, Depends, HTTPException, BackgroundTasks, Cookie, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import RedirectResponse, JSONResponse
 from sqlalchemy.orm import Session
-from dotenv import load_dotenv
 
 from database import engine, get_db, Base
 from models import Analysis, AnalysisStatus, Repository, DiscoveredFile, FileType
 from schemas import (
-    AnalysisResponse, AnalysisListItem, 
+    AnalysisResponse, AnalysisListItem,
     RepositoryResponse, RepositoryDetailResponse, RepositoryListItem,
     DiscoveredFileResponse, FileSelectionUpdate,
     GitHubRepoInfo, GitHubImportRequest, GitHubAuthStatus,
@@ -24,8 +26,6 @@ import claude_service
 import github_service
 import folder_service
 import agent_service
-
-load_dotenv()
 
 # Create database tables
 Base.metadata.create_all(bind=engine)
