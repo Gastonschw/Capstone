@@ -10,6 +10,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
+from config import DATABASE_KIND
 from database import init_db
 from routers import (
     repositories_router,
@@ -24,6 +25,8 @@ from routers import (
 async def lifespan(app: FastAPI):
     """Application lifespan: initialize database on startup."""
     await init_db()
+    db_label = "Supabase (Postgres)" if DATABASE_KIND == "postgres" else "SQLite"
+    print(f"Database: {db_label}")
     yield
 
 
@@ -59,7 +62,11 @@ app.include_router(integrity_router)
 @app.get("/api/health")
 async def health_check():
     """Health check endpoint."""
-    return {"status": "healthy", "service": "combined-analyzer"}
+    return {
+        "status": "healthy",
+        "service": "combined-analyzer",
+        "database": DATABASE_KIND,
+    }
 
 
 # Combined analysis endpoint
