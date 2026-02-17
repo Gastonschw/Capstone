@@ -137,3 +137,62 @@ export async function pollAnalysis(type, analysisId, onUpdate, intervalMs = 2000
 
   poll();
 }
+
+// ============== Chat ==============
+
+export async function sendChatMessage(analysisType, analysisId, message, history, onChunk, onDone, onError) {
+  const url = `/api/chat/${analysisType}/${analysisId}`;
+
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        message,
+        history: history.map(m => ({ role: m.role, content: m.content })),
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+
+      if (done) {
+        break;
+      }
+
+      buffer += decoder.decode(value, { stream: true });
+
+      // Process complete SSE messages
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || ''; // Keep incomplete line in buffer
+
+      for (const line of lines) {
+        if (line.startsWith('data: ')) {
+          const data = line.slice(6);
+
+          if (data === '[DONE]') {
+            onDone();
+            return;
+          }
+
+          onChunk(data);
+        }
+      }
+    }
+
+    onDone();
+  } catch (err) {
+    console.error('Chat error:', err);
+    onError(err);
+  }
+}

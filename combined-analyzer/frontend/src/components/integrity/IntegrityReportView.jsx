@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { getIntegrityAnalysis, pollAnalysis } from '../../api';
 import CharacteristicCard from './CharacteristicCard';
+import AnalysisChat from '../common/AnalysisChat';
 
 const styles = {
   container: {
@@ -300,6 +301,8 @@ export default function IntegrityReportView({ analysisId, onBack }) {
           ))}
         </div>
       )}
+
+      <AnalysisChat analysisId={analysisId} analysisType="integrity" />
     </div>
   );
 }

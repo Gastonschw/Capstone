@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { getERDAnalysis, pollAnalysis } from '../../api';
+import AnalysisChat from '../common/AnalysisChat';
 
 const styles = {
   container: {
@@ -469,6 +470,8 @@ export default function ERDReportView({ analysisId, onBack }) {
       )}
 
       <UMLClassDiagram umlStructure={uml_structure} />
+
+      <AnalysisChat analysisId={analysisId} analysisType="erd" />
     </div>
   );
 }
