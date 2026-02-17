@@ -23,6 +23,8 @@ Thumbs.db
 # Uploads (keep directory but not contents)
 backend/uploads/*
 !backend/uploads/.gitkeep
+**/uploads/repos/*
+!**/uploads/repos/.gitkeep
 
 # Test files
 *.test.png

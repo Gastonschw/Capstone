@@ -1,0 +1,27 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(curl:*)",
+      "Bash(pip install:*)",
+      "Bash(npm install:*)",
+      "Bash(npm run dev:*)",
+      "Bash(set:*)",
+      "Bash(python:*)",
+      "Bash(timeout:*)",
+      "Bash(netstat:*)",
+      "Bash(findstr:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git push)",
+      "Bash(.venvScriptsactivate)",
+      "Bash(uvicorn:*)",
+      "Bash(venvScriptspip install -r requirements.txt)",
+      "Bash(./venv/Scripts/pip install:*)",
+      "Bash(./venv/Scripts/uvicorn:*)",
+      "Bash(\"C:/Users/Gasto/capstone/erd-analyzer/backend/venv/Scripts/uvicorn.exe\" main:app --reload --port 8000)",
+      "Bash(\"C:/Users/Gasto/capstone/erd-analyzer/backend/venv/Scripts/python.exe\" -m uvicorn main:app --port 8000)",
+      "Bash(\"C:/Users/Gasto/capstone/erd-analyzer/backend/venv/Scripts/python.exe\" -m uvicorn main:app --reload --port 8000)",
+      "Bash(\"C:/Users/Gasto/capstone/erd-analyzer/backend/venv/Scripts/python.exe\" -m pip install:*)"
+    ]
+  }
+}
