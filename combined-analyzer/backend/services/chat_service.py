@@ -3,24 +3,38 @@ Chat Service
 
 Provides streaming chat capabilities for discussing analysis results.
 Builds context from analysis data and original source files.
+Uses TAMU API (OpenAI-compatible) for LLM responses.
 """
 
+import os
 import base64
 import json
 from pathlib import Path
 from typing import List, Dict, Any, AsyncGenerator
 
-import anthropic
+from openai import OpenAI
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+from dotenv import load_dotenv
 
 from models.repository import Repository, DiscoveredFile, FileType
 from models.erd_analysis import ERDAnalysis
 from models.integrity_analysis import IntegrityAnalysis
 
+load_dotenv()
+
+# TAMU API configuration
+TAMU_API_KEY = os.getenv("TAMU_API_KEY")
+TAMU_API_BASE = os.getenv("TAMU_API_BASE", "https://chat-api.tamu.ai/api/v1")
+TAMU_MODEL = "protected.Claude Opus 4.5"
+
 
 def get_client():
-    return anthropic.Anthropic()
+    """Get OpenAI client configured for TAMU API."""
+    return OpenAI(
+        api_key=TAMU_API_KEY,
+        base_url=TAMU_API_BASE,
+    )
 
 
 def encode_image_to_base64(image_path: str) -> tuple[str, str]:
@@ -139,18 +153,16 @@ async def build_erd_context(
 - Keep responses concise but thorough
 """
 
-    # Build image content blocks for the ERD images
+    # Build image content blocks for the ERD images (OpenAI vision format)
     image_blocks = []
     for f in erd_files:
         try:
             full_path = Path(repo_path) / f.file_path
             image_data, media_type = encode_image_to_base64(str(full_path))
             image_blocks.append({
-                "type": "image",
-                "source": {
-                    "type": "base64",
-                    "media_type": media_type,
-                    "data": image_data,
+                "type": "image_url",
+                "image_url": {
+                    "url": f"data:{media_type};base64,{image_data}"
                 }
             })
         except Exception as e:
@@ -317,8 +329,10 @@ async def stream_erd_chat(
     # Build context
     system_prompt, image_blocks = await build_erd_context(analysis, repository, db)
 
-    # Build messages
-    messages = []
+    # Build messages (OpenAI format - system message in messages array)
+    messages = [
+        {"role": "system", "content": system_prompt}
+    ]
 
     # Add history
     for msg in history:
@@ -342,17 +356,20 @@ async def stream_erd_chat(
             "content": message
         })
 
-    # Stream response
+    # Stream response using OpenAI client
     client = get_client()
 
-    with client.messages.stream(
-        model="claude-sonnet-4-20250514",
+    stream = client.chat.completions.create(
+        model=TAMU_MODEL,
         max_tokens=2048,
-        system=system_prompt,
         messages=messages,
-    ) as stream:
-        for text in stream.text_stream:
-            yield text
+        stream=True,
+        temperature=0,
+    )
+
+    for chunk in stream:
+        if chunk.choices and chunk.choices[0].delta.content:
+            yield chunk.choices[0].delta.content
 
 
 async def stream_integrity_chat(
@@ -388,8 +405,10 @@ async def stream_integrity_chat(
     # Build context
     system_prompt = await build_integrity_context(analysis, repository, db)
 
-    # Build messages
-    messages = []
+    # Build messages (OpenAI format - system message in messages array)
+    messages = [
+        {"role": "system", "content": system_prompt}
+    ]
 
     # Add history
     for msg in history:
@@ -404,14 +423,17 @@ async def stream_integrity_chat(
         "content": message
     })
 
-    # Stream response
+    # Stream response using OpenAI client
     client = get_client()
 
-    with client.messages.stream(
-        model="claude-sonnet-4-20250514",
+    stream = client.chat.completions.create(
+        model=TAMU_MODEL,
         max_tokens=2048,
-        system=system_prompt,
         messages=messages,
-    ) as stream:
-        for text in stream.text_stream:
-            yield text
+        stream=True,
+        temperature=0,
+    )
+
+    for chunk in stream:
+        if chunk.choices and chunk.choices[0].delta.content:
+            yield chunk.choices[0].delta.content

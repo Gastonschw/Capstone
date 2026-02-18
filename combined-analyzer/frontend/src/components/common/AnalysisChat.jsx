@@ -1,4 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import { sendChatMessage } from '../../api';
 
 const styles = {
@@ -68,7 +70,6 @@ const styles = {
     maxWidth: '85%',
     fontSize: '14px',
     lineHeight: '1.5',
-    whiteSpace: 'pre-wrap',
     wordBreak: 'break-word',
   },
   userBubble: {
@@ -137,6 +138,13 @@ const styles = {
     animation: 'bounce 1.4s infinite ease-in-out',
   },
 };
+
+// Strip <think> tags and their content from the response
+function stripThinkTags(content) {
+  if (!content) return '';
+  // Remove <think>...</think> blocks (including multiline)
+  return content.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+}
 
 export default function AnalysisChat({ analysisId, analysisType }) {
   const [messages, setMessages] = useState([]);
@@ -237,6 +245,58 @@ export default function AnalysisChat({ analysisId, analysisType }) {
         .dot-1 { animation-delay: 0s; }
         .dot-2 { animation-delay: 0.2s; }
         .dot-3 { animation-delay: 0.4s; }
+        .markdown-content p { margin: 0 0 8px 0; }
+        .markdown-content p:last-child { margin-bottom: 0; }
+        .markdown-content ul, .markdown-content ol {
+          margin: 8px 0;
+          padding-left: 24px;
+          list-style-position: outside;
+        }
+        .markdown-content ul { list-style-type: disc; }
+        .markdown-content ol { list-style-type: decimal; }
+        .markdown-content li {
+          margin: 4px 0;
+          display: list-item;
+        }
+        .markdown-content table {
+          border-collapse: collapse;
+          margin: 8px 0;
+          width: 100%;
+        }
+        .markdown-content th, .markdown-content td {
+          border: 1px solid #ddd;
+          padding: 8px;
+          text-align: left;
+        }
+        .markdown-content th {
+          background-color: rgba(0,0,0,0.05);
+        }
+        .markdown-content code {
+          background-color: rgba(0,0,0,0.1);
+          padding: 2px 6px;
+          border-radius: 4px;
+          font-family: monospace;
+          font-size: 13px;
+        }
+        .markdown-content pre {
+          background-color: rgba(0,0,0,0.1);
+          padding: 12px;
+          border-radius: 6px;
+          overflow-x: auto;
+          margin: 8px 0;
+        }
+        .markdown-content pre code {
+          background: none;
+          padding: 0;
+        }
+        .markdown-content strong { font-weight: 600; }
+        .markdown-content h1, .markdown-content h2, .markdown-content h3 {
+          margin: 12px 0 8px 0;
+          font-weight: 600;
+        }
+        .markdown-content h1 { font-size: 18px; }
+        .markdown-content h2 { font-size: 16px; }
+        .markdown-content h3 { font-size: 15px; }
       `}</style>
 
       <div style={styles.header}>
@@ -290,7 +350,15 @@ export default function AnalysisChat({ analysisId, analysisType }) {
                     ...(msg.role === 'user' ? styles.userBubble : styles.assistantBubble),
                   }}
                 >
-                  {msg.content || (
+                  {msg.content ? (
+                    msg.role === 'assistant' ? (
+                      <div className="markdown-content">
+                        <ReactMarkdown remarkPlugins={[remarkGfm]}>{stripThinkTags(msg.content)}</ReactMarkdown>
+                      </div>
+                    ) : (
+                      msg.content
+                    )
+                  ) : (
                     <div style={styles.loadingIndicator}>
                       <div style={styles.loadingDots}>
                         <div className="dot-1" style={styles.dot}></div>
