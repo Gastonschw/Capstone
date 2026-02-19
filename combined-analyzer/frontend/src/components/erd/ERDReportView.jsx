@@ -286,7 +286,7 @@ function UserStoryCoverage({ coverage }) {
   );
 }
 
-export default function ERDReportView({ analysisId, onBack }) {
+export default function ERDReportView({ analysisId, onBack, chatModel, chatApiKey }) {
   const [analysis, setAnalysis] = useState(null);
   const [loading, setLoading] = useState(true);
 
@@ -471,7 +471,12 @@ export default function ERDReportView({ analysisId, onBack }) {
 
       <UMLClassDiagram umlStructure={uml_structure} />
 
-      <AnalysisChat analysisId={analysisId} analysisType="erd" />
+      <AnalysisChat
+        analysisId={analysisId}
+        analysisType="erd"
+        chatModel={chatModel}
+        chatApiKey={chatApiKey}
+      />
     </div>
   );
 }

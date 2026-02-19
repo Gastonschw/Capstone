@@ -140,17 +140,43 @@ export async function pollAnalysis(type, analysisId, onUpdate, intervalMs = 2000
 
 // ============== Chat ==============
 
-export async function sendChatMessage(analysisType, analysisId, message, history, onChunk, onDone, onError) {
+export async function listChatModels(apiKey = '') {
+  const headers = {};
+  if (apiKey) {
+    headers['X-TAMU-API-Key'] = apiKey;
+  }
+
+  const response = await api.get('/chat/models', { headers });
+  return response.data;
+}
+
+export async function sendChatMessage(
+  analysisType,
+  analysisId,
+  message,
+  history,
+  model,
+  apiKey,
+  onChunk,
+  onDone,
+  onError
+) {
   const url = `/api/chat/${analysisType}/${analysisId}`;
+  const headers = {
+    'Content-Type': 'application/json',
+  };
+
+  if (apiKey) {
+    headers['X-TAMU-API-Key'] = apiKey;
+  }
 
   try {
     const response = await fetch(url, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
+      headers,
       body: JSON.stringify({
         message,
+        model,
         history: history.map(m => ({ role: m.role, content: m.content })),
       }),
     });

@@ -169,7 +169,7 @@ function getRiskStyle(riskLevel) {
   }
 }
 
-export default function IntegrityReportView({ analysisId, onBack }) {
+export default function IntegrityReportView({ analysisId, onBack, chatModel, chatApiKey }) {
   const [analysis, setAnalysis] = useState(null);
   const [loading, setLoading] = useState(true);
 
@@ -302,7 +302,12 @@ export default function IntegrityReportView({ analysisId, onBack }) {
         </div>
       )}
 
-      <AnalysisChat analysisId={analysisId} analysisType="integrity" />
+      <AnalysisChat
+        analysisId={analysisId}
+        analysisType="integrity"
+        chatModel={chatModel}
+        chatApiKey={chatApiKey}
+      />
     </div>
   );
 }
