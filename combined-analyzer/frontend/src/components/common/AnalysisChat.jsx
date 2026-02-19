@@ -146,7 +146,7 @@ function stripThinkTags(content) {
   return content.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
 }
 
-export default function AnalysisChat({ analysisId, analysisType }) {
+export default function AnalysisChat({ analysisId, analysisType, chatModel, chatApiKey }) {
   const [messages, setMessages] = useState([]);
   const [inputValue, setInputValue] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -184,6 +184,8 @@ export default function AnalysisChat({ analysisId, analysisType }) {
       analysisId,
       trimmedMessage,
       history,
+      chatModel,
+      chatApiKey,
       (chunk) => {
         // Update the last message with new chunk
         setMessages(prev => {

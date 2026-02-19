@@ -10,8 +10,9 @@ import os
 import base64
 import json
 from pathlib import Path
-from typing import List, Dict, Any, AsyncGenerator
+from typing import List, Dict, Any, AsyncGenerator, Optional
 
+import httpx
 from openai import OpenAI
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -26,15 +27,64 @@ load_dotenv()
 # TAMU API configuration
 TAMU_API_KEY = os.getenv("TAMU_API_KEY")
 TAMU_API_BASE = os.getenv("TAMU_API_BASE", "https://chat-api.tamu.ai/api/v1")
-TAMU_MODEL = "protected.Claude Opus 4.5"
+TAMU_MODELS_URL = os.getenv("TAMU_MODELS_URL", "https://chat-api.tamu.ai/openai/models")
+TAMU_DEFAULT_MODEL = os.getenv("TAMU_MODEL", "protected.Claude Opus 4.5")
 
 
-def get_client():
+def resolve_api_key(api_key: Optional[str] = None) -> str:
+    """Resolve API key from request override or environment."""
+    resolved_api_key = api_key or TAMU_API_KEY
+    if not resolved_api_key:
+        raise ValueError("TAMU API key is not configured")
+    return resolved_api_key
+
+
+def get_client(api_key: Optional[str] = None):
     """Get OpenAI client configured for TAMU API."""
     return OpenAI(
-        api_key=TAMU_API_KEY,
+        api_key=resolve_api_key(api_key),
         base_url=TAMU_API_BASE,
     )
+
+
+async def fetch_tamu_models(api_key: Optional[str] = None) -> List[Dict[str, str]]:
+    """Fetch and normalize model list from TAMU OpenAI-compatible endpoint."""
+    headers = {"Authorization": f"Bearer {resolve_api_key(api_key)}"}
+
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        response = await client.get(TAMU_MODELS_URL, headers=headers)
+        response.raise_for_status()
+        payload = response.json()
+
+    models_data = payload.get("data", []) if isinstance(payload, dict) else []
+    normalized_models = []
+    seen_ids = set()
+
+    for model in models_data:
+        if not isinstance(model, dict):
+            continue
+
+        openai_model = model.get("openai", {})
+        if not isinstance(openai_model, dict):
+            openai_model = {}
+
+        model_id = model.get("id") or openai_model.get("id")
+        if not model_id or model_id in seen_ids:
+            continue
+
+        model_name = model.get("name") or openai_model.get("name") or model_id
+        normalized_models.append({"id": model_id, "name": model_name})
+        seen_ids.add(model_id)
+
+    normalized_models.sort(key=lambda m: m["name"].lower())
+
+    if not normalized_models and TAMU_DEFAULT_MODEL:
+        normalized_models.append({
+            "id": TAMU_DEFAULT_MODEL,
+            "name": TAMU_DEFAULT_MODEL,
+        })
+
+    return normalized_models
 
 
 def encode_image_to_base64(image_path: str) -> tuple[str, str]:
@@ -300,7 +350,9 @@ async def stream_erd_chat(
     analysis_id: int,
     message: str,
     history: List[Dict[str, str]],
-    db: AsyncSession
+    db: AsyncSession,
+    model: Optional[str] = None,
+    api_key: Optional[str] = None
 ) -> AsyncGenerator[str, None]:
     """
     Stream a chat response about an ERD analysis.
@@ -357,10 +409,11 @@ async def stream_erd_chat(
         })
 
     # Stream response using OpenAI client
-    client = get_client()
+    client = get_client(api_key=api_key)
+    resolved_model = model or TAMU_DEFAULT_MODEL
 
     stream = client.chat.completions.create(
-        model=TAMU_MODEL,
+        model=resolved_model,
         max_tokens=2048,
         messages=messages,
         stream=True,
@@ -376,7 +429,9 @@ async def stream_integrity_chat(
     analysis_id: int,
     message: str,
     history: List[Dict[str, str]],
-    db: AsyncSession
+    db: AsyncSession,
+    model: Optional[str] = None,
+    api_key: Optional[str] = None
 ) -> AsyncGenerator[str, None]:
     """
     Stream a chat response about an integrity analysis.
@@ -424,10 +479,11 @@ async def stream_integrity_chat(
     })
 
     # Stream response using OpenAI client
-    client = get_client()
+    client = get_client(api_key=api_key)
+    resolved_model = model or TAMU_DEFAULT_MODEL
 
     stream = client.chat.completions.create(
-        model=TAMU_MODEL,
+        model=resolved_model,
         max_tokens=2048,
         messages=messages,
         stream=True,

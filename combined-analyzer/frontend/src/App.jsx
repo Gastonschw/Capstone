@@ -5,7 +5,16 @@ import UploadForm from './components/upload/UploadForm';
 import RepositoryBrowser from './components/repository/RepositoryBrowser';
 import ERDReportView from './components/erd/ERDReportView';
 import IntegrityReportView from './components/integrity/IntegrityReportView';
-import { listRepositories } from './api';
+import { listRepositories, listChatModels } from './api';
+
+const CHAT_API_KEY_STORAGE = 'tamu_chat_api_key';
+const CHAT_MODEL_STORAGE = 'tamu_chat_model';
+const DEFAULT_CHAT_MODEL = 'protected.Claude Opus 4.5';
+
+function readFromStorage(key, fallback = '') {
+  if (typeof window === 'undefined') return fallback;
+  return window.localStorage.getItem(key) || fallback;
+}
 
 const styles = {
   app: {
@@ -70,6 +79,11 @@ export default function App() {
   const [currentAnalysis, setCurrentAnalysis] = useState(null);
   const [analysisType, setAnalysisType] = useState(null);
   const [activeReportTab, setActiveReportTab] = useState('erd'); // 'erd' or 'integrity'
+  const [chatApiKey, setChatApiKey] = useState(() => readFromStorage(CHAT_API_KEY_STORAGE));
+  const [chatModel, setChatModel] = useState(() => readFromStorage(CHAT_MODEL_STORAGE, DEFAULT_CHAT_MODEL));
+  const [availableModels, setAvailableModels] = useState([]);
+  const [modelsLoading, setModelsLoading] = useState(false);
+  const [modelsError, setModelsError] = useState('');
 
   useEffect(() => {
     loadRepositories();
@@ -80,6 +94,64 @@ export default function App() {
       window.history.replaceState({}, '', window.location.pathname);
     }
   }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    if (chatApiKey) {
+      window.localStorage.setItem(CHAT_API_KEY_STORAGE, chatApiKey);
+    } else {
+      window.localStorage.removeItem(CHAT_API_KEY_STORAGE);
+    }
+  }, [chatApiKey]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    if (chatModel) {
+      window.localStorage.setItem(CHAT_MODEL_STORAGE, chatModel);
+    } else {
+      window.localStorage.removeItem(CHAT_MODEL_STORAGE);
+    }
+  }, [chatModel]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadModels = async () => {
+      setModelsLoading(true);
+      setModelsError('');
+
+      try {
+        const response = await listChatModels(chatApiKey);
+        const models = Array.isArray(response?.models) ? response.models : [];
+        const fallbackModel = response?.default_model || DEFAULT_CHAT_MODEL;
+
+        if (cancelled) return;
+
+        setAvailableModels(models);
+        setChatModel((previousModel) => {
+          const preferredModel = previousModel || fallbackModel;
+          if (models.some((m) => m.id === preferredModel)) {
+            return preferredModel;
+          }
+          return models[0]?.id || fallbackModel;
+        });
+      } catch (err) {
+        if (cancelled) return;
+        setAvailableModels([]);
+        setModelsError('Unable to load models');
+      } finally {
+        if (!cancelled) {
+          setModelsLoading(false);
+        }
+      }
+    };
+
+    const timeoutId = setTimeout(loadModels, 300);
+    return () => {
+      cancelled = true;
+      clearTimeout(timeoutId);
+    };
+  }, [chatApiKey]);
 
   const loadRepositories = async () => {
     try {
@@ -176,6 +248,8 @@ export default function App() {
             <ERDReportView
               analysisId={currentAnalysis.id}
               onBack={handleBackToRepository}
+              chatModel={chatModel}
+              chatApiKey={chatApiKey}
             />
           </div>
         ) : null;
@@ -203,6 +277,8 @@ export default function App() {
             <IntegrityReportView
               analysisId={currentAnalysis.id}
               onBack={handleBackToRepository}
+              chatModel={chatModel}
+              chatApiKey={chatApiKey}
             />
           </div>
         ) : null;
@@ -214,7 +290,15 @@ export default function App() {
 
   return (
     <div style={styles.app}>
-      <Header />
+      <Header
+        availableModels={availableModels}
+        selectedModel={chatModel}
+        onModelChange={setChatModel}
+        apiKey={chatApiKey}
+        onApiKeyChange={setChatApiKey}
+        modelsLoading={modelsLoading}
+        modelsError={modelsError}
+      />
       <div style={styles.main}>
         <Sidebar
           repositories={repositories}
