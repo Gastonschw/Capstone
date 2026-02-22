@@ -142,7 +142,10 @@ export default function Header({
     if (!supabase?.auth) return;
     setSigningIn(true);
     try {
-      await supabase.auth.signInWithOAuth({ provider: 'google' });
+      await supabase.auth.signInWithOAuth({
+        provider: 'google',
+        options: { redirectTo: `${window.location.origin}/analyzer` },
+      });
     } finally {
       setSigningIn(false);
     }
