@@ -4,7 +4,7 @@ GitHub OAuth API routes.
 
 import uuid
 from typing import List, Optional, Tuple
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
 from fastapi.responses import RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -154,8 +154,10 @@ async def github_import(
     request: Request,
     response: Response,
     db: AsyncSession = Depends(get_db),
+    tamu_api_key: Optional[str] = Header(default=None, alias="X-TAMU-API-Key"),
 ):
-    """Import a GitHub repository. Optionally scoped to user via X-User-Id header."""
+    """Import a GitHub repository. Optionally scoped to user via X-User-Id header.
+    Uses TAMU API key from body or X-TAMU-API-Key header for file discovery (same as chat)."""
     from dependencies import get_optional_user_id
 
     session_id = get_session_id(request, response)
@@ -168,6 +170,8 @@ async def github_import(
             detail="Not authenticated with GitHub"
         )
 
+    api_key = import_request.api_key if (import_request.api_key and import_request.api_key.strip()) else tamu_api_key
+
     try:
         # Clone the repository (linked to current user when X-User-Id is sent)
         repository = await clone_github_repo(
@@ -177,8 +181,8 @@ async def github_import(
             owner_user_id=owner_user_id,
         )
 
-        # Run file discovery
-        await run_file_discovery(repository.local_path, db, repository.id)
+        # Run file discovery (uses TAMU API with provided key, not Anthropic)
+        await run_file_discovery(repository.local_path, db, repository.id, api_key=api_key)
 
         return {
             "id": repository.id,

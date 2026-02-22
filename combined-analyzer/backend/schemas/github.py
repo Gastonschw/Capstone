@@ -25,3 +25,4 @@ class GitHubRepo(BaseModel):
 class GitHubImportRequest(BaseModel):
     """Request to import a GitHub repository."""
     repo_full_name: str
+    api_key: Optional[str] = None  # TAMU API key for file discovery (uses same key as chat)

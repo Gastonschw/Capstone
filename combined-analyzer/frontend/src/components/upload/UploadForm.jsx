@@ -189,7 +189,7 @@ const styles = {
   },
 };
 
-export default function UploadForm({ onRepositoryCreated }) {
+export default function UploadForm({ onRepositoryCreated, tamuApiKey = '' }) {
   const [activeTab, setActiveTab] = useState('folder');
 
   // Folder upload state
@@ -321,7 +321,7 @@ export default function UploadForm({ onRepositoryCreated }) {
     setError(null);
 
     try {
-      const repository = await importGitHubRepo(selectedRepo.full_name);
+      const repository = await importGitHubRepo(selectedRepo.full_name, tamuApiKey);
       setSuccess(`Repository "${repository.name}" imported successfully!`);
       setSelectedRepo(null);
       onRepositoryCreated(repository);

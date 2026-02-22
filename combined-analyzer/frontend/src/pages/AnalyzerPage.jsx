@@ -221,7 +221,7 @@ export default function AnalyzerPage() {
       case 'upload':
         return (
           <div>
-            <UploadForm onRepositoryCreated={handleRepositoryCreated} />
+            <UploadForm onRepositoryCreated={handleRepositoryCreated} tamuApiKey={chatApiKey} />
             {repositories.length === 0 && (
               <div style={styles.welcome}>
                 <h2 style={styles.welcomeTitle}>Welcome to Combined Analyzer</h2>
@@ -241,6 +241,8 @@ export default function AnalyzerPage() {
             repositoryId={selectedRepo.id}
             onBack={handleBackToUpload}
             onAnalysisComplete={handleAnalysisComplete}
+            tamuApiKey={chatApiKey}
+            tamuModel={chatModel}
           />
         ) : null;
 

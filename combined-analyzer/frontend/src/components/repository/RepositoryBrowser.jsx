@@ -150,7 +150,7 @@ const styles = {
   },
 };
 
-export default function RepositoryBrowser({ repositoryId, onBack, onAnalysisComplete }) {
+export default function RepositoryBrowser({ repositoryId, onBack, onAnalysisComplete, tamuApiKey = '', tamuModel = '' }) {
   const [repository, setRepository] = useState(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -267,7 +267,7 @@ export default function RepositoryBrowser({ repositoryId, onBack, onAnalysisComp
           }
         });
       } else if (analysisTypes.integrity) {
-        const analysis = await startIntegrityAnalysis(repositoryId);
+        const analysis = await startIntegrityAnalysis(repositoryId, tamuApiKey, tamuModel);
         pollAnalysis('integrity', analysis.id, (updatedAnalysis) => {
           if (updatedAnalysis.status === 'completed' || updatedAnalysis.status === 'failed') {
             setAnalyzing(false);
