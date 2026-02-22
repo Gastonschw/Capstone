@@ -2,6 +2,7 @@
 Repository management API routes.
 """
 
+import uuid
 from typing import List
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Request
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -28,7 +29,13 @@ async def list_repositories(
     db: AsyncSession = Depends(get_db),
 ):
     """List repositories. When X-User-Id header is sent, only that user's repos are returned."""
-    user_id = get_optional_user_id(request)
+    user_id_raw = get_optional_user_id(request)
+    owner_uuid = None
+    if user_id_raw:
+        try:
+            owner_uuid = uuid.UUID(user_id_raw)
+        except (ValueError, TypeError):
+            pass
     q = (
         select(Repository)
         .options(selectinload(Repository.discovered_files))
@@ -36,8 +43,8 @@ async def list_repositories(
         .options(selectinload(Repository.integrity_analyses))
         .order_by(Repository.created_at.desc())
     )
-    if user_id is not None:
-        q = q.where(Repository.owner_user_id == user_id)
+    if owner_uuid is not None:
+        q = q.where(Repository.owner_user_id == owner_uuid)
     result = await db.execute(q)
     repositories = result.scalars().all()
 

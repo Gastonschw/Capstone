@@ -3,6 +3,7 @@ GitHub OAuth token model.
 """
 
 from sqlalchemy import Column, Integer, String, Text, DateTime
+from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.sql import func
 
 from database import Base
@@ -20,5 +21,5 @@ class GitHubToken(Base):
     access_token_encrypted = Column(Text, nullable=False)
     github_user_id = Column(String(100), nullable=True)
     github_username = Column(String(255), nullable=True)
-    # When using Supabase: links to public.users (Google Auth). Nullable for SQLite/legacy.
-    user_id = Column(String(36), nullable=True)
+    # When using Supabase: links to public.users (Google Auth). UUID for Postgres.
+    user_id = Column(PG_UUID(as_uuid=True), nullable=True)

@@ -15,6 +15,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import REPOS_DIR, MAX_UPLOAD_SIZE, ALLOWED_ARCHIVE_TYPES
 from models.repository import Repository, RepositorySource
+from services.github_service import _user_exists_in_public_users
+
+
+def _optional_uuid(value: Optional[str]):
+    """Convert optional string to uuid.UUID for Postgres; returns None if empty or invalid."""
+    if not value:
+        return None
+    try:
+        return uuid.UUID(str(value))
+    except (ValueError, TypeError):
+        return None
 
 
 def validate_zip_file(file: UploadFile) -> None:
@@ -47,6 +58,10 @@ async def save_and_extract_zip(
         Repository record with extracted files
     """
     validate_zip_file(file)
+
+    link_uid = _optional_uuid(owner_user_id)
+    if link_uid is not None and not await _user_exists_in_public_users(db, link_uid):
+        link_uid = None
 
     # Determine repository name
     if not repo_name:
@@ -87,7 +102,7 @@ async def save_and_extract_zip(
             name=repo_name,
             source_type=RepositorySource.folder_upload.value,
             local_path=str(repo_path),
-            owner_user_id=owner_user_id,
+            owner_user_id=link_uid,
         )
         db.add(repository)
         await db.commit()

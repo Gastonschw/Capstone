@@ -29,3 +29,6 @@ backend/uploads/*
 # Test files
 *.test.png
 test_erd.png
+
+# Local/cache (do not commit)
+combined-analyzer/models.json

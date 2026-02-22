@@ -4,15 +4,17 @@
 
 - Create a project at [supabase.com](https://supabase.com) if you haven’t.
 - Ensure **Authentication → Providers → Google** is enabled and your Google OAuth client ID/secret are set (use the same redirect URL Supabase shows).
-- Create the `public.users` table (e.g. with a trigger that syncs from `auth.users` on sign-up).
+- Create the `public.users` table (id uuid PK references auth.users(id) on delete cascade, created_at, updated_at, email, full_name, avatar_url).
 
-## 2. Run the migration
+## 2. Run the migrations
 
-In the [Supabase SQL Editor](https://supabase.com/dashboard/project/_/sql), run:
+In the [Supabase SQL Editor](https://supabase.com/dashboard/project/_/sql), run in order:
 
-- **File:** `migrations/20260217000000_link_users_repos_github_tokens.sql`
+1. **`migrations/20260217100000_sync_auth_users_to_public_users.sql`**  
+   Adds a trigger so that **every new sign-up** (e.g. Google login) inserts a row into `public.users`. Also backfills existing `auth.users` into `public.users`. Without this, Google login does **not** add to `public.users`.
 
-This adds `owner_user_id` to `repositories`, `user_id` to `github_tokens`, and the `set_current_timestamp()` trigger function.
+2. **`migrations/20260217000000_link_users_repos_github_tokens.sql`**  
+   Adds `owner_user_id` to `repositories`, `user_id` to `github_tokens`, and the `set_current_timestamp()` trigger function.
 
 ## 3. Frontend env
 
