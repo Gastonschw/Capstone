@@ -89,9 +89,11 @@ async def save_github_token(
     db: AsyncSession,
     session_id: str,
     access_token: str,
-    user_info: dict
+    user_info: dict,
+    *,
+    user_id: Optional[str] = None,
 ) -> GitHubToken:
-    """Save or update GitHub token for a session."""
+    """Save or update GitHub token for a session. Optionally link to Supabase user (user_id)."""
     # Check if token exists for this session
     result = await db.execute(
         select(GitHubToken).where(GitHubToken.session_id == session_id)
@@ -104,6 +106,8 @@ async def save_github_token(
         existing.access_token_encrypted = encrypted_token
         existing.github_user_id = str(user_info.get("id"))
         existing.github_username = user_info.get("login")
+        if user_id is not None:
+            existing.user_id = user_id
         await db.commit()
         return existing
 
@@ -112,6 +116,7 @@ async def save_github_token(
         access_token_encrypted=encrypted_token,
         github_user_id=str(user_info.get("id")),
         github_username=user_info.get("login"),
+        user_id=user_id,
     )
     db.add(token_record)
     await db.commit()
@@ -169,7 +174,9 @@ def list_github_repos(access_token: str) -> List[dict]:
 async def clone_github_repo(
     access_token: str,
     repo_full_name: str,
-    db: AsyncSession
+    db: AsyncSession,
+    *,
+    owner_user_id: Optional[str] = None,
 ) -> Repository:
     """Clone a GitHub repository and create a Repository record."""
     g = Github(access_token)
@@ -207,13 +214,14 @@ async def clone_github_repo(
             shutil.move(str(item), str(repo_path / item.name))
         sub_dir.rmdir()
 
-    # Create Repository record
+    # Create Repository record (optionally linked to Supabase user)
     repository = Repository(
         name=repo.name,
         source_type=RepositorySource.github.value,
         github_url=repo.html_url,
         github_repo_full_name=repo_full_name,
         local_path=str(repo_path),
+        owner_user_id=owner_user_id,
     )
     db.add(repository)
     await db.commit()

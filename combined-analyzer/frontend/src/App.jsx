@@ -5,7 +5,8 @@ import UploadForm from './components/upload/UploadForm';
 import RepositoryBrowser from './components/repository/RepositoryBrowser';
 import ERDReportView from './components/erd/ERDReportView';
 import IntegrityReportView from './components/integrity/IntegrityReportView';
-import { listRepositories, listChatModels } from './api';
+import { listRepositories, listChatModels, setCurrentUserId } from './api';
+import { supabase, isSupabaseConfigured } from './lib/supabaseClient';
 
 const CHAT_API_KEY_STORAGE = 'tamu_chat_api_key';
 const CHAT_MODEL_STORAGE = 'tamu_chat_model';
@@ -84,6 +85,8 @@ export default function App() {
   const [availableModels, setAvailableModels] = useState([]);
   const [modelsLoading, setModelsLoading] = useState(false);
   const [modelsError, setModelsError] = useState('');
+  const [authUser, setAuthUser] = useState(null);
+  const [authLoading, setAuthLoading] = useState(isSupabaseConfigured);
 
   useEffect(() => {
     loadRepositories();
@@ -93,6 +96,23 @@ export default function App() {
     if (params.get('github_auth')) {
       window.history.replaceState({}, '', window.location.pathname);
     }
+  }, []);
+
+  useEffect(() => {
+    if (!isSupabaseConfigured || !supabase) {
+      setAuthLoading(false);
+      return;
+    }
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setAuthUser(session?.user ?? null);
+      setCurrentUserId(session?.user?.id ?? null);
+    });
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setAuthUser(session?.user ?? null);
+      setCurrentUserId(session?.user?.id ?? null);
+      setAuthLoading(false);
+    });
+    return () => subscription.unsubscribe();
   }, []);
 
   useEffect(() => {
@@ -298,6 +318,9 @@ export default function App() {
         onApiKeyChange={setChatApiKey}
         modelsLoading={modelsLoading}
         modelsError={modelsError}
+        authUser={authUser}
+        authLoading={authLoading}
+        supabaseConfigured={isSupabaseConfigured}
       />
       <div style={styles.main}>
         <Sidebar

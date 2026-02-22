@@ -3,12 +3,13 @@ Repository management API routes.
 """
 
 from typing import List
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
 from database import get_db
+from dependencies import get_optional_user_id
 from models.repository import Repository, DiscoveredFile
 from schemas.repository import (
     RepositoryResponse,
@@ -22,15 +23,22 @@ router = APIRouter(prefix="/api", tags=["repositories"])
 
 
 @router.get("/repositories", response_model=List[RepositoryListResponse])
-async def list_repositories(db: AsyncSession = Depends(get_db)):
-    """List all repositories."""
-    result = await db.execute(
+async def list_repositories(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """List repositories. When X-User-Id header is sent, only that user's repos are returned."""
+    user_id = get_optional_user_id(request)
+    q = (
         select(Repository)
         .options(selectinload(Repository.discovered_files))
         .options(selectinload(Repository.erd_analyses))
         .options(selectinload(Repository.integrity_analyses))
         .order_by(Repository.created_at.desc())
     )
+    if user_id is not None:
+        q = q.where(Repository.owner_user_id == user_id)
+    result = await db.execute(q)
     repositories = result.scalars().all()
 
     return [

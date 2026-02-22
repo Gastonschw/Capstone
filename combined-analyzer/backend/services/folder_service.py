@@ -8,6 +8,7 @@ import uuid
 import shutil
 import zipfile
 from pathlib import Path
+from typing import Optional
 
 from fastapi import UploadFile, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -30,7 +31,9 @@ def validate_zip_file(file: UploadFile) -> None:
 async def save_and_extract_zip(
     file: UploadFile,
     db: AsyncSession,
-    repo_name: str = None
+    repo_name: str = None,
+    *,
+    owner_user_id: Optional[str] = None,
 ) -> Repository:
     """
     Save uploaded ZIP file and extract its contents.
@@ -79,11 +82,12 @@ async def save_and_extract_zip(
         # If extraction created a single root folder, move contents up
         flatten_single_root_directory(repo_path)
 
-        # Create Repository record
+        # Create Repository record (optionally linked to Supabase user)
         repository = Repository(
             name=repo_name,
             source_type=RepositorySource.folder_upload.value,
             local_path=str(repo_path),
+            owner_user_id=owner_user_id,
         )
         db.add(repository)
         await db.commit()

@@ -1,8 +1,32 @@
 import axios from 'axios';
 
+const USER_ID_STORAGE_KEY = 'supabase_user_id';
+
+/** Call this when the user logs in with Supabase (e.g. Google). Pass null to clear. */
+export function setCurrentUserId(userId) {
+  if (userId == null || userId === '') {
+    localStorage.removeItem(USER_ID_STORAGE_KEY);
+  } else {
+    localStorage.setItem(USER_ID_STORAGE_KEY, String(userId));
+  }
+}
+
+/** Current Supabase user id, if set. Used to link GitHub and repos to the user. */
+export function getCurrentUserId() {
+  return localStorage.getItem(USER_ID_STORAGE_KEY) || null;
+}
+
 const api = axios.create({
   baseURL: '/api',
   withCredentials: true,
+});
+
+api.interceptors.request.use((config) => {
+  const userId = getCurrentUserId();
+  if (userId) {
+    config.headers['X-User-Id'] = userId;
+  }
+  return config;
 });
 
 // ============== Repository Management ==============
@@ -57,7 +81,11 @@ export async function uploadFolder(zipFile, name = null) {
 // ============== GitHub OAuth ==============
 
 export function initiateGitHubAuth() {
-  window.location.href = '/api/github/auth';
+  const userId = getCurrentUserId();
+  const url = userId
+    ? `/api/github/auth?user_id=${encodeURIComponent(userId)}`
+    : '/api/github/auth';
+  window.location.href = url;
 }
 
 export async function getGitHubAuthStatus() {

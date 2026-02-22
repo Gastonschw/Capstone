@@ -39,6 +39,8 @@ class Repository(Base):
     github_url = Column(String(500), nullable=True)
     github_repo_full_name = Column(String(255), nullable=True)
     local_path = Column(String(500), nullable=False)
+    # When using Supabase: links to public.users (Google Auth). Nullable for SQLite/legacy.
+    owner_user_id = Column(String(36), nullable=True)
 
     # Relationships
     discovered_files = relationship(
