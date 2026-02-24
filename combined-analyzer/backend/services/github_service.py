@@ -13,7 +13,7 @@ from typing import Optional, List
 from urllib.parse import urlencode
 
 import httpx
-from cryptography.fernet import Fernet
+from cryptography.fernet import Fernet, InvalidToken
 from github import Github, GithubException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, text
@@ -160,7 +160,13 @@ async def get_github_token(db: AsyncSession, session_id: str) -> Optional[str]:
     )
     token_record = result.scalar_one_or_none()
     if token_record:
-        return decrypt_token(token_record.access_token_encrypted)
+        try:
+            return decrypt_token(token_record.access_token_encrypted)
+        except InvalidToken:
+            # Encryption key has changed or token is corrupted; remove stale record
+            await db.delete(token_record)
+            await db.commit()
+            return None
     return None
 
 
