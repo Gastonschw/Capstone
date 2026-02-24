@@ -15,6 +15,7 @@ from .github import (
 )
 from .erd_analysis import ERDAnalysisResponse, ERDAnalysisListItem
 from .integrity_analysis import IntegrityAnalysisResponse, IntegrityAnalysisListItem
+from .classes import ClassSummary, MyClassesResponse
 
 __all__ = [
     "RepositoryResponse",
@@ -28,4 +29,6 @@ __all__ = [
     "ERDAnalysisListItem",
     "IntegrityAnalysisResponse",
     "IntegrityAnalysisListItem",
+    "ClassSummary",
+    "MyClassesResponse",
 ]

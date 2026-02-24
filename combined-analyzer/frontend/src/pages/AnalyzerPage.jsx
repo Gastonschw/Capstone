@@ -5,6 +5,7 @@ import UploadForm from '../components/upload/UploadForm';
 import RepositoryBrowser from '../components/repository/RepositoryBrowser';
 import ERDReportView from '../components/erd/ERDReportView';
 import IntegrityReportView from '../components/integrity/IntegrityReportView';
+import ClassesPanel from '../components/classes/ClassesPanel';
 import { listRepositories, listChatModels, setCurrentUserId } from '../api';
 import { supabase, isSupabaseConfigured } from '../lib/supabaseClient';
 
@@ -222,6 +223,7 @@ export default function AnalyzerPage() {
         return (
           <div>
             <UploadForm onRepositoryCreated={handleRepositoryCreated} tamuApiKey={chatApiKey} />
+            <ClassesPanel />
             {repositories.length === 0 && (
               <div style={styles.welcome}>
                 <h2 style={styles.welcomeTitle}>Welcome to Combined Analyzer</h2>
