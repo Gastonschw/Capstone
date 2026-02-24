@@ -16,7 +16,7 @@ import httpx
 from cryptography.fernet import Fernet
 from github import Github, GithubException
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 from config import (
     GITHUB_CLIENT_ID,
@@ -24,9 +24,34 @@ from config import (
     GITHUB_REDIRECT_URI,
     ENCRYPTION_KEY,
     REPOS_DIR,
+    DATABASE_KIND,
 )
 from models.github_token import GitHubToken
 from models.repository import Repository, RepositorySource
+
+
+def _optional_uuid(value: Optional[str]):
+    """Convert optional string to uuid.UUID for Postgres; returns None if empty or invalid."""
+    if not value:
+        return None
+    try:
+        return uuid.UUID(str(value))
+    except (ValueError, TypeError):
+        return None
+
+
+async def _user_exists_in_public_users(db: AsyncSession, uid: uuid.UUID) -> bool:
+    """Return True if the given uuid exists in public.users (Supabase). No-op for SQLite."""
+    if DATABASE_KIND != "postgres":
+        return False
+    try:
+        r = await db.execute(
+            text("SELECT 1 FROM public.users WHERE id = :uid"),
+            {"uid": uid},
+        )
+        return r.scalar_one_or_none() is not None
+    except Exception:
+        return False
 
 
 # Initialize Fernet cipher
@@ -89,9 +114,16 @@ async def save_github_token(
     db: AsyncSession,
     session_id: str,
     access_token: str,
-    user_info: dict
+    user_info: dict,
+    *,
+    user_id: Optional[str] = None,
 ) -> GitHubToken:
-    """Save or update GitHub token for a session."""
+    """Save or update GitHub token for a session. Optionally link to Supabase user (user_id)."""
+    # Only link user_id if that user exists in public.users (avoids FK violation if sync delayed)
+    link_uid = _optional_uuid(user_id)
+    if link_uid is not None and not await _user_exists_in_public_users(db, link_uid):
+        link_uid = None
+
     # Check if token exists for this session
     result = await db.execute(
         select(GitHubToken).where(GitHubToken.session_id == session_id)
@@ -104,6 +136,7 @@ async def save_github_token(
         existing.access_token_encrypted = encrypted_token
         existing.github_user_id = str(user_info.get("id"))
         existing.github_username = user_info.get("login")
+        existing.user_id = link_uid
         await db.commit()
         return existing
 
@@ -112,6 +145,7 @@ async def save_github_token(
         access_token_encrypted=encrypted_token,
         github_user_id=str(user_info.get("id")),
         github_username=user_info.get("login"),
+        user_id=link_uid,
     )
     db.add(token_record)
     await db.commit()
@@ -169,9 +203,15 @@ def list_github_repos(access_token: str) -> List[dict]:
 async def clone_github_repo(
     access_token: str,
     repo_full_name: str,
-    db: AsyncSession
+    db: AsyncSession,
+    *,
+    owner_user_id: Optional[str] = None,
 ) -> Repository:
     """Clone a GitHub repository and create a Repository record."""
+    link_uid = _optional_uuid(owner_user_id)
+    if link_uid is not None and not await _user_exists_in_public_users(db, link_uid):
+        link_uid = None
+
     g = Github(access_token)
 
     try:
@@ -207,13 +247,14 @@ async def clone_github_repo(
             shutil.move(str(item), str(repo_path / item.name))
         sub_dir.rmdir()
 
-    # Create Repository record
+    # Create Repository record (optionally linked to Supabase user)
     repository = Repository(
         name=repo.name,
         source_type=RepositorySource.github.value,
         github_url=repo.html_url,
         github_repo_full_name=repo_full_name,
         local_path=str(repo_path),
+        owner_user_id=link_uid,
     )
     db.add(repository)
     await db.commit()

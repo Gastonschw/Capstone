@@ -3,10 +3,11 @@ Integrity Analysis API routes.
 """
 
 import json
-from typing import List
+from typing import List, Optional
 from datetime import datetime
 from dataclasses import asdict
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
+from fastapi import APIRouter, Body, Depends, Header, HTTPException, BackgroundTasks
+from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
@@ -17,6 +18,11 @@ from schemas.integrity_analysis import IntegrityAnalysisResponse, IntegrityAnaly
 from services.integrity_analysis_service import run_integrity_analysis
 
 router = APIRouter(prefix="/api/integrity", tags=["integrity-analysis"])
+
+
+class StartIntegrityAnalysisRequest(BaseModel):
+    api_key: Optional[str] = None
+    model: Optional[str] = None
 
 
 def characteristic_report_to_dict(report) -> dict:
@@ -31,8 +37,14 @@ def characteristic_report_to_dict(report) -> dict:
     }
 
 
-async def run_analysis_task(analysis_id: int, repository_id: int, db_url: str):
-    """Background task to run Integrity analysis."""
+async def run_analysis_task(
+    analysis_id: int,
+    repository_id: int,
+    db_url: str,
+    api_key: Optional[str] = None,
+    model: Optional[str] = None,
+):
+    """Background task to run Integrity analysis. Uses TAMU API with api_key and optional model."""
     from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
     from sqlalchemy.orm import sessionmaker
 
@@ -59,8 +71,8 @@ async def run_analysis_task(analysis_id: int, repository_id: int, db_url: str):
             analysis.status = "processing"
             await db.commit()
 
-            # Run the analysis
-            analysis_result = await run_integrity_analysis(repository, db)
+            # Run the analysis (TAMU API with user's key and optional model)
+            analysis_result = await run_integrity_analysis(repository, db, api_key=api_key, model=model)
 
             # Store results
             analysis.status = "completed"
@@ -95,13 +107,24 @@ async def run_analysis_task(analysis_id: int, repository_id: int, db_url: str):
             await db.commit()
 
 
+def _get_tamu_api_key(body: Optional[StartIntegrityAnalysisRequest], header_key: Optional[str]) -> Optional[str]:
+    """Resolve TAMU API key from request body or header."""
+    if body and body.api_key and body.api_key.strip():
+        return body.api_key.strip()
+    if header_key and header_key.strip():
+        return header_key.strip()
+    return None
+
+
 @router.post("/repository/{repository_id}/analyze")
 async def start_integrity_analysis(
     repository_id: int,
     background_tasks: BackgroundTasks,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    body: Optional[StartIntegrityAnalysisRequest] = Body(None),
+    tamu_api_key: Optional[str] = Header(default=None, alias="X-TAMU-API-Key"),
 ):
-    """Start an Integrity analysis for a repository."""
+    """Start an Integrity analysis for a repository. Uses TAMU API key from body or header."""
     # Verify repository exists
     result = await db.execute(
         select(Repository).where(Repository.id == repository_id)
@@ -110,6 +133,17 @@ async def start_integrity_analysis(
 
     if not repository:
         raise HTTPException(status_code=404, detail="Repository not found")
+
+    api_key = _get_tamu_api_key(body, tamu_api_key)
+    model = (body.model and body.model.strip()) if body else None
+    try:
+        from services.chat_service import resolve_api_key
+        resolve_api_key(api_key)
+    except ValueError as e:
+        raise HTTPException(
+            status_code=400,
+            detail="TAMU API key is required for integrity analysis. Provide it in the analyzer TAMU API Key field or set TAMU_API_KEY in the backend .env. See https://docs.tamus.ai/docs/prod/advanced/api/api-docs"
+        ) from e
 
     # Create analysis record
     analysis = IntegrityAnalysis(
@@ -126,7 +160,9 @@ async def start_integrity_analysis(
         run_analysis_task,
         analysis.id,
         repository_id,
-        DATABASE_URL
+        DATABASE_URL,
+        api_key,
+        model,
     )
 
     return {

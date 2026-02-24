@@ -3,8 +3,8 @@ GitHub OAuth API routes.
 """
 
 import uuid
-from typing import List
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from typing import List, Optional, Tuple
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
 from fastapi.responses import RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -45,14 +45,27 @@ def get_session_id(request: Request, response: Response) -> str:
 
 
 @router.get("/auth")
-async def github_auth(request: Request, response: Response):
-    """Initiate GitHub OAuth flow."""
+async def github_auth(
+    request: Request,
+    response: Response,
+    user_id: Optional[str] = None,
+):
+    """Initiate GitHub OAuth flow. Optional user_id links the GitHub account to that user (Supabase)."""
     session_id = get_session_id(request, response)
 
-    # Use session_id as OAuth state for CSRF protection
-    auth_url = get_github_auth_url(session_id)
+    # State: session_id for CSRF; optional user_id so callback can link token to user
+    state = f"{session_id}:{user_id}" if user_id else session_id
+    auth_url = get_github_auth_url(state)
 
     return RedirectResponse(url=auth_url)
+
+
+def _parse_state(state: str, session_id: str) -> Tuple[str, Optional[str]]:
+    """Extract session_id and optional user_id from state. Returns (session_id, user_id or None)."""
+    if ":" in state:
+        parts = state.split(":", 1)
+        return parts[0], parts[1] if len(parts) > 1 and parts[1] else None
+    return state, None
 
 
 @router.get("/callback")
@@ -64,9 +77,10 @@ async def github_callback(
 ):
     """Handle GitHub OAuth callback."""
     session_id = request.cookies.get(SESSION_COOKIE)
+    expected_session_id, user_id = _parse_state(state, session_id)
 
     # Verify state matches session (CSRF protection)
-    if state != session_id:
+    if session_id != expected_session_id:
         return RedirectResponse(
             url="/?github_auth=error&message=Invalid+state+parameter"
         )
@@ -85,8 +99,8 @@ async def github_callback(
         # Get user info
         user_info = await get_github_user(access_token)
 
-        # Save token
-        await save_github_token(db, session_id, access_token, user_info)
+        # Save token (optionally linked to Supabase user)
+        await save_github_token(db, session_id, access_token, user_info, user_id=user_id)
 
         return RedirectResponse(url="/?github_auth=success")
 
@@ -139,11 +153,16 @@ async def github_import(
     import_request: GitHubImportRequest,
     request: Request,
     response: Response,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    tamu_api_key: Optional[str] = Header(default=None, alias="X-TAMU-API-Key"),
 ):
-    """Import a GitHub repository."""
+    """Import a GitHub repository. Optionally scoped to user via X-User-Id header.
+    Uses TAMU API key from body or X-TAMU-API-Key header for file discovery (same as chat)."""
+    from dependencies import get_optional_user_id
+
     session_id = get_session_id(request, response)
     access_token = await get_github_token(db, session_id)
+    owner_user_id = get_optional_user_id(request)
 
     if not access_token:
         raise HTTPException(
@@ -151,16 +170,19 @@ async def github_import(
             detail="Not authenticated with GitHub"
         )
 
+    api_key = import_request.api_key if (import_request.api_key and import_request.api_key.strip()) else tamu_api_key
+
     try:
-        # Clone the repository
+        # Clone the repository (linked to current user when X-User-Id is sent)
         repository = await clone_github_repo(
             access_token,
             import_request.repo_full_name,
-            db
+            db,
+            owner_user_id=owner_user_id,
         )
 
-        # Run file discovery
-        await run_file_discovery(repository.local_path, db, repository.id)
+        # Run file discovery (uses TAMU API with provided key, not Anthropic)
+        await run_file_discovery(repository.local_path, db, repository.id, api_key=api_key)
 
         return {
             "id": repository.id,

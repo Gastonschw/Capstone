@@ -5,22 +5,104 @@ Multi-agent workflow for security integrity analysis:
 1. File Discovery - identify security-relevant files
 2. 6 Characteristic Agents - analyze each security characteristic
 3. Summary Agent - generate overall assessment
+
+Uses TAMU API (OpenAI-compatible) so the same API key as chat works.
 """
 
+import asyncio
 import json
+import logging
 from pathlib import Path
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from dataclasses import dataclass
 
-import anthropic
+logger = logging.getLogger(__name__)
+
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 from models.repository import Repository, DiscoveredFile, FileType
+from services.chat_service import get_client, TAMU_DEFAULT_MODEL
 
 
-# Initialize Anthropic client
-client = anthropic.Anthropic()
+def _extract_content_from_sse(sse_text: str) -> str:
+    """If the response is SSE (multiple 'data: {...}' lines), concatenate all delta.content."""
+    if not sse_text or not sse_text.strip():
+        return ""
+    out = []
+    for line in sse_text.split("\n"):
+        line = line.strip()
+        if not line.startswith("data:"):
+            continue
+        payload = line[5:].strip()
+        if payload == "[DONE]" or not payload:
+            continue
+        try:
+            obj = json.loads(payload)
+        except json.JSONDecodeError:
+            continue
+        choices = obj.get("choices") if isinstance(obj, dict) else None
+        if not choices or not isinstance(choices, list):
+            continue
+        first = choices[0] if choices else None
+        if not isinstance(first, dict):
+            continue
+        delta = first.get("delta") or first.get("message") or {}
+        if not isinstance(delta, dict):
+            continue
+        part = delta.get("content")
+        if isinstance(part, str):
+            out.append(part)
+    return "".join(out) if out else ""
+
+
+def _tamu_completion(
+    api_key: Optional[str],
+    prompt: str,
+    max_tokens: int = 4096,
+    model: Optional[str] = None,
+) -> str:
+    """Sync helper: call TAMU chat completion and return response text."""
+    client = get_client(api_key=api_key)
+    use_model = (model and model.strip()) or TAMU_DEFAULT_MODEL
+    # Request non-streaming; some TAMU backends still return SSE
+    resp = client.chat.completions.create(
+        model=use_model,
+        max_tokens=max_tokens,
+        messages=[{"role": "user", "content": prompt}],
+        temperature=1,
+        stream=False,
+    )
+    content = ""
+    try:
+        if isinstance(resp, str):
+            content = resp
+        elif getattr(resp, "choices", None) and resp.choices:
+            msg = getattr(resp.choices[0], "message", None)
+            if msg and getattr(msg, "content", None):
+                content = msg.content or ""
+            else:
+                delta = getattr(resp.choices[0], "delta", None)
+                if delta and getattr(delta, "content", None):
+                    content = delta.content or ""
+        if not content and isinstance(resp, str):
+            content = resp
+    except Exception as e:
+        logger.exception("TAMU API response handling: %s", e)
+
+    # If we got raw SSE (e.g. "data: {...}\n..."), extract and concatenate chunk contents
+    if isinstance(content, str) and (content.strip().startswith("data:") or "\ndata:" in content):
+        content = _extract_content_from_sse(content)
+    if content:
+        logger.info(
+            "TAMU API response (content, first 1500 chars): %s",
+            (content[:1500] + "..." if len(content) > 1500 else content),
+        )
+        return content
+    logger.warning(
+        "TAMU API returned empty or unexpected content. Check API key, TAMU_API_BASE, and TAMU_MODEL. See https://docs.tamus.ai/docs/prod/advanced/api/api-docs"
+    )
+    return ""
 
 
 @dataclass
@@ -58,26 +140,81 @@ def read_file_content(repo_path: str, file_path: str) -> str:
 
 
 def parse_json_response(response_text: str) -> Dict:
-    """Parse JSON from Claude's response, handling markdown code blocks."""
+    """Parse JSON from model response, handling markdown code blocks and surrounding text.
+    Also unwraps TAMU/OpenAI-style responses that may nest JSON in 'content' or 'message'.
+    """
+    if not response_text or not isinstance(response_text, str):
+        return {}
     text = response_text.strip()
 
     # Try to extract JSON from markdown code block
-    if '```json' in text:
-        start = text.find('```json') + 7
-        end = text.find('```', start)
+    if "```json" in text:
+        start = text.find("```json") + 7
+        end = text.find("```", start)
         if end > start:
             text = text[start:end].strip()
-    elif '```' in text:
-        start = text.find('```') + 3
-        end = text.find('```', start)
+    elif "```" in text:
+        start = text.find("```") + 3
+        end = text.find("```", start)
         if end > start:
             text = text[start:end].strip()
 
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError as e:
-        print(f"JSON parse error: {e}")
-        return {}
+    def try_parse(s: str) -> Dict:
+        try:
+            return json.loads(s)
+        except json.JSONDecodeError:
+            return {}
+
+    obj = try_parse(text)
+    if not obj:
+        # Fallback: find first { and matching } to extract a JSON object from surrounding text
+        start_brace = text.find("{")
+        if start_brace >= 0:
+            depth = 0
+            for i in range(start_brace, len(text)):
+                if text[i] == "{":
+                    depth += 1
+                elif text[i] == "}":
+                    depth -= 1
+                    if depth == 0:
+                        obj = try_parse(text[start_brace : i + 1])
+                        break
+
+    # Unwrap nested JSON: some APIs return {"content": "{\"score\": ...}"} or similar
+    for key in ("content", "message", "result", "data", "body"):
+        if not obj or not isinstance(obj.get(key), str):
+            continue
+        inner = obj[key].strip()
+        if (inner.startswith("{") and "}" in inner) or (inner.startswith("[") and "]" in inner):
+            parsed = try_parse(inner)
+            if parsed and isinstance(parsed, dict):
+                # Prefer inner keys for our expected fields
+                for k, v in parsed.items():
+                    if k not in obj or obj[k] is None:
+                        obj[k] = v
+    return obj if isinstance(obj, dict) else {}
+
+
+def _description_from_result(result: Dict, default: str) -> str:
+    """Get description from result, trying common keys used by TAMU/LLM responses."""
+    if not result:
+        return default
+    for key in ("description", "summary", "explanation", "assessment", "overview"):
+        val = result.get(key)
+        if isinstance(val, str) and val.strip():
+            return val.strip()
+    return default
+
+
+def _log_incomplete_response(characteristic: str, result: Dict, raw_preview: str) -> None:
+    """Log when a characteristic analysis returned incomplete or unparseable data."""
+    if not result or not result.get("description"):
+        logger.warning(
+            "Integrity analysis '%s' returned no description. Parsed keys: %s. Raw response (first 800 chars): %s",
+            characteristic,
+            list(result.keys()) if result else [],
+            raw_preview[:800] if raw_preview else "(empty)",
+        )
 
 
 def prepare_file_contents(repo_path: str, files: List[Dict], limit: int = 30) -> List[Dict]:
@@ -94,7 +231,9 @@ def prepare_file_contents(repo_path: str, files: List[Dict], limit: int = 30) ->
     return file_contents
 
 
-async def analyze_confidentiality(repo_path: str, files: List[Dict]) -> CharacteristicReport:
+async def analyze_confidentiality(
+    repo_path: str, files: List[Dict], api_key: Optional[str] = None, model: Optional[str] = None
+) -> CharacteristicReport:
     """
     Analyze whether unauthorized users cannot access private data.
     """
@@ -135,25 +274,25 @@ Respond with a JSON object:
     "recommendations": ["<actionable recommendation>", ...]
 }}"""
 
-    response = client.messages.create(
-        model="claude-sonnet-4-20250514",
-        max_tokens=4096,
-        messages=[{"role": "user", "content": prompt}]
-    )
-
-    result = parse_json_response(response.content[0].text)
+    response_text = await asyncio.to_thread(_tamu_completion, api_key, prompt, 4096, model)
+    result = parse_json_response(response_text)
+    default_desc = "No structured result from model (check API key and response format)." if not result else "Analysis incomplete"
+    description = _description_from_result(result, default_desc)
+    _log_incomplete_response("Confidentiality", result, response_text or "")
 
     return CharacteristicReport(
         characteristic="Confidentiality",
-        score=result.get('score', 50),
-        status=result.get('status', 'partially_fulfilled'),
-        description=result.get('description', 'Analysis incomplete'),
-        findings=result.get('findings', []),
-        recommendations=result.get('recommendations', [])
+        score=result.get("score", 50),
+        status=result.get("status", "partially_fulfilled"),
+        description=description,
+        findings=result.get("findings", []),
+        recommendations=result.get("recommendations", [])
     )
 
 
-async def analyze_data_integrity(repo_path: str, files: List[Dict]) -> CharacteristicReport:
+async def analyze_data_integrity(
+    repo_path: str, files: List[Dict], api_key: Optional[str] = None, model: Optional[str] = None
+) -> CharacteristicReport:
     """
     Analyze whether data cannot be modified without authorization.
     """
@@ -190,25 +329,25 @@ Respond with a JSON object:
     "recommendations": ["<actionable recommendation>", ...]
 }}"""
 
-    response = client.messages.create(
-        model="claude-sonnet-4-20250514",
-        max_tokens=4096,
-        messages=[{"role": "user", "content": prompt}]
-    )
-
-    result = parse_json_response(response.content[0].text)
+    response_text = await asyncio.to_thread(_tamu_completion, api_key, prompt, 4096, model)
+    result = parse_json_response(response_text)
+    default_desc = "No structured result from model (check API key and response format)." if not result else "Analysis incomplete"
+    description = _description_from_result(result, default_desc)
+    _log_incomplete_response("Data Integrity", result, response_text or "")
 
     return CharacteristicReport(
         characteristic="Data Integrity",
         score=result.get('score', 50),
         status=result.get('status', 'partially_fulfilled'),
-        description=result.get('description', 'Analysis incomplete'),
-        findings=result.get('findings', []),
-        recommendations=result.get('recommendations', [])
+        description=description,
+        findings=result.get("findings", []),
+        recommendations=result.get("recommendations", [])
     )
 
 
-async def analyze_authenticity(repo_path: str, files: List[Dict]) -> CharacteristicReport:
+async def analyze_authenticity(
+    repo_path: str, files: List[Dict], api_key: Optional[str] = None, model: Optional[str] = None
+) -> CharacteristicReport:
     """
     Analyze whether users are who they claim to be.
     """
@@ -245,25 +384,25 @@ Respond with a JSON object:
     "recommendations": ["<actionable recommendation>", ...]
 }}"""
 
-    response = client.messages.create(
-        model="claude-sonnet-4-20250514",
-        max_tokens=4096,
-        messages=[{"role": "user", "content": prompt}]
-    )
-
-    result = parse_json_response(response.content[0].text)
+    response_text = await asyncio.to_thread(_tamu_completion, api_key, prompt, 4096, model)
+    result = parse_json_response(response_text)
+    default_desc = "No structured result from model (check API key and response format)." if not result else "Analysis incomplete"
+    description = _description_from_result(result, default_desc)
+    _log_incomplete_response("Authenticity", result, response_text or "")
 
     return CharacteristicReport(
         characteristic="Authenticity",
-        score=result.get('score', 50),
-        status=result.get('status', 'partially_fulfilled'),
-        description=result.get('description', 'Analysis incomplete'),
-        findings=result.get('findings', []),
-        recommendations=result.get('recommendations', [])
+        score=result.get("score", 50),
+        status=result.get("status", "partially_fulfilled"),
+        description=description,
+        findings=result.get("findings", []),
+        recommendations=result.get("recommendations", [])
     )
 
 
-async def analyze_non_repudiation(repo_path: str, files: List[Dict]) -> CharacteristicReport:
+async def analyze_non_repudiation(
+    repo_path: str, files: List[Dict], api_key: Optional[str] = None, model: Optional[str] = None
+) -> CharacteristicReport:
     """
     Analyze whether actions are logged and traceable to specific users.
     """
@@ -300,25 +439,25 @@ Respond with a JSON object:
     "recommendations": ["<actionable recommendation>", ...]
 }}"""
 
-    response = client.messages.create(
-        model="claude-sonnet-4-20250514",
-        max_tokens=4096,
-        messages=[{"role": "user", "content": prompt}]
-    )
-
-    result = parse_json_response(response.content[0].text)
+    response_text = await asyncio.to_thread(_tamu_completion, api_key, prompt, 4096, model)
+    result = parse_json_response(response_text)
+    default_desc = "No structured result from model (check API key and response format)." if not result else "Analysis incomplete"
+    description = _description_from_result(result, default_desc)
+    _log_incomplete_response("Non-Repudiation", result, response_text or "")
 
     return CharacteristicReport(
         characteristic="Non-Repudiation",
-        score=result.get('score', 50),
-        status=result.get('status', 'partially_fulfilled'),
-        description=result.get('description', 'Analysis incomplete'),
-        findings=result.get('findings', []),
-        recommendations=result.get('recommendations', [])
+        score=result.get("score", 50),
+        status=result.get("status", "partially_fulfilled"),
+        description=description,
+        findings=result.get("findings", []),
+        recommendations=result.get("recommendations", [])
     )
 
 
-async def analyze_accountability(repo_path: str, files: List[Dict]) -> CharacteristicReport:
+async def analyze_accountability(
+    repo_path: str, files: List[Dict], api_key: Optional[str] = None, model: Optional[str] = None
+) -> CharacteristicReport:
     """
     Analyze whether the system tracks who did what and when.
     """
@@ -355,25 +494,25 @@ Respond with a JSON object:
     "recommendations": ["<actionable recommendation>", ...]
 }}"""
 
-    response = client.messages.create(
-        model="claude-sonnet-4-20250514",
-        max_tokens=4096,
-        messages=[{"role": "user", "content": prompt}]
-    )
-
-    result = parse_json_response(response.content[0].text)
+    response_text = await asyncio.to_thread(_tamu_completion, api_key, prompt, 4096, model)
+    result = parse_json_response(response_text)
+    default_desc = "No structured result from model (check API key and response format)." if not result else "Analysis incomplete"
+    description = _description_from_result(result, default_desc)
+    _log_incomplete_response("Accountability", result, response_text or "")
 
     return CharacteristicReport(
         characteristic="Accountability",
-        score=result.get('score', 50),
-        status=result.get('status', 'partially_fulfilled'),
-        description=result.get('description', 'Analysis incomplete'),
-        findings=result.get('findings', []),
-        recommendations=result.get('recommendations', [])
+        score=result.get("score", 50),
+        status=result.get("status", "partially_fulfilled"),
+        description=description,
+        findings=result.get("findings", []),
+        recommendations=result.get("recommendations", [])
     )
 
 
-async def analyze_resistance(repo_path: str, files: List[Dict]) -> CharacteristicReport:
+async def analyze_resistance(
+    repo_path: str, files: List[Dict], api_key: Optional[str] = None, model: Optional[str] = None
+) -> CharacteristicReport:
     """
     Analyze whether the system resists common attacks.
     """
@@ -411,25 +550,25 @@ Respond with a JSON object:
     "recommendations": ["<actionable recommendation>", ...]
 }}"""
 
-    response = client.messages.create(
-        model="claude-sonnet-4-20250514",
-        max_tokens=4096,
-        messages=[{"role": "user", "content": prompt}]
-    )
-
-    result = parse_json_response(response.content[0].text)
+    response_text = await asyncio.to_thread(_tamu_completion, api_key, prompt, 4096, model)
+    result = parse_json_response(response_text)
+    default_desc = "No structured result from model (check API key and response format)." if not result else "Analysis incomplete"
+    description = _description_from_result(result, default_desc)
+    _log_incomplete_response("Resistance", result, response_text or "")
 
     return CharacteristicReport(
         characteristic="Resistance",
-        score=result.get('score', 50),
-        status=result.get('status', 'partially_fulfilled'),
-        description=result.get('description', 'Analysis incomplete'),
-        findings=result.get('findings', []),
-        recommendations=result.get('recommendations', [])
+        score=result.get("score", 50),
+        status=result.get("status", "partially_fulfilled"),
+        description=description,
+        findings=result.get("findings", []),
+        recommendations=result.get("recommendations", [])
     )
 
 
-async def generate_summary(reports: List[CharacteristicReport]) -> Dict:
+async def generate_summary(
+    reports: List[CharacteristicReport], api_key: Optional[str] = None, model: Optional[str] = None
+) -> Dict:
     """
     Generate an overall summary based on all characteristic analyses.
     """
@@ -468,21 +607,19 @@ Respond with a JSON object:
     "priority_recommendations": ["<most critical recommendation>", ...]
 }}"""
 
-    response = client.messages.create(
-        model="claude-sonnet-4-20250514",
-        max_tokens=2048,
-        messages=[{"role": "user", "content": prompt}]
-    )
-
-    return parse_json_response(response.content[0].text)
+    response_text = await asyncio.to_thread(_tamu_completion, api_key, prompt, 2048, model)
+    return parse_json_response(response_text)
 
 
 async def run_integrity_analysis(
     repository: Repository,
-    db: AsyncSession
+    db: AsyncSession,
+    api_key: Optional[str] = None,
+    model: Optional[str] = None,
 ) -> IntegrityAnalysisResult:
     """
     Main orchestrator: Runs the complete integrity analysis workflow.
+    Uses TAMU API with api_key (or env fallback).
     """
     repo_path = repository.local_path
 
@@ -501,17 +638,17 @@ async def run_integrity_analysis(
     # Convert to list of dicts
     file_list = [{'file_path': f.file_path, 'file_type': f.file_type} for f in files]
 
-    # Run all characteristic analyses
-    confidentiality = await analyze_confidentiality(repo_path, file_list)
-    data_integrity = await analyze_data_integrity(repo_path, file_list)
-    authenticity = await analyze_authenticity(repo_path, file_list)
-    non_repudiation = await analyze_non_repudiation(repo_path, file_list)
-    accountability = await analyze_accountability(repo_path, file_list)
-    resistance = await analyze_resistance(repo_path, file_list)
+    # Run all characteristic analyses (TAMU API)
+    confidentiality = await analyze_confidentiality(repo_path, file_list, api_key, model)
+    data_integrity = await analyze_data_integrity(repo_path, file_list, api_key, model)
+    authenticity = await analyze_authenticity(repo_path, file_list, api_key, model)
+    non_repudiation = await analyze_non_repudiation(repo_path, file_list, api_key, model)
+    accountability = await analyze_accountability(repo_path, file_list, api_key, model)
+    resistance = await analyze_resistance(repo_path, file_list, api_key, model)
 
     # Generate summary
     all_reports = [confidentiality, data_integrity, authenticity, non_repudiation, accountability, resistance]
-    summary = await generate_summary(all_reports)
+    summary = await generate_summary(all_reports, api_key, model)
 
     return IntegrityAnalysisResult(
         confidentiality=confidentiality,

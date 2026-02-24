@@ -2,13 +2,15 @@
 Repository management API routes.
 """
 
+import uuid
 from typing import List
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
 from database import get_db
+from dependencies import get_optional_user_id
 from models.repository import Repository, DiscoveredFile
 from schemas.repository import (
     RepositoryResponse,
@@ -22,15 +24,28 @@ router = APIRouter(prefix="/api", tags=["repositories"])
 
 
 @router.get("/repositories", response_model=List[RepositoryListResponse])
-async def list_repositories(db: AsyncSession = Depends(get_db)):
-    """List all repositories."""
-    result = await db.execute(
+async def list_repositories(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """List repositories. When X-User-Id header is sent, only that user's repos are returned."""
+    user_id_raw = get_optional_user_id(request)
+    owner_uuid = None
+    if user_id_raw:
+        try:
+            owner_uuid = uuid.UUID(user_id_raw)
+        except (ValueError, TypeError):
+            pass
+    q = (
         select(Repository)
         .options(selectinload(Repository.discovered_files))
         .options(selectinload(Repository.erd_analyses))
         .options(selectinload(Repository.integrity_analyses))
         .order_by(Repository.created_at.desc())
     )
+    if owner_uuid is not None:
+        q = q.where(Repository.owner_user_id == owner_uuid)
+    result = await db.execute(q)
     repositories = result.scalars().all()
 
     return [

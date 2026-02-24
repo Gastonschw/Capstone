@@ -1,4 +1,5 @@
-import React from 'react';
+import React, { useState } from 'react';
+import { supabase } from '../../lib/supabaseClient';
 
 const styles = {
   header: {
@@ -93,6 +94,33 @@ const styles = {
     fontWeight: '500',
     alignSelf: 'flex-end',
   },
+  authSection: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '12px',
+  },
+  authUser: {
+    fontSize: '12px',
+    opacity: 0.95,
+    maxWidth: '160px',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+  },
+  authBtn: {
+    padding: '8px 14px',
+    borderRadius: '8px',
+    border: '1px solid rgba(255,255,255,0.5)',
+    background: 'rgba(255,255,255,0.15)',
+    color: '#fff',
+    fontSize: '13px',
+    fontWeight: '500',
+    cursor: 'pointer',
+  },
+  authBtnSignOut: {
+    background: 'transparent',
+    borderColor: 'rgba(255,255,255,0.4)',
+  },
 };
 
 export default function Header({
@@ -103,8 +131,30 @@ export default function Header({
   onApiKeyChange,
   modelsLoading = false,
   modelsError = '',
+  authUser = null,
+  authLoading = false,
+  supabaseConfigured = false,
 }) {
+  const [signingIn, setSigningIn] = useState(false);
   const hasModels = availableModels.length > 0;
+
+  const handleSignIn = async () => {
+    if (!supabase?.auth) return;
+    setSigningIn(true);
+    try {
+      await supabase.auth.signInWithOAuth({
+        provider: 'google',
+        options: { redirectTo: `${window.location.origin}/analyzer` },
+      });
+    } finally {
+      setSigningIn(false);
+    }
+  };
+
+  const handleSignOut = async () => {
+    if (!supabase?.auth) return;
+    await supabase.auth.signOut();
+  };
 
   return (
     <header style={styles.header}>
@@ -117,6 +167,35 @@ export default function Header({
       </div>
 
       <div style={styles.rightSection}>
+        {supabaseConfigured && (
+          <div style={styles.authSection}>
+            {authLoading ? (
+              <span style={styles.authUser}>Loading…</span>
+            ) : authUser ? (
+              <>
+                <span style={styles.authUser} title={authUser.email}>
+                  {authUser.email || authUser.user_metadata?.email || 'Signed in'}
+                </span>
+                <button
+                  type="button"
+                  style={{ ...styles.authBtn, ...styles.authBtnSignOut }}
+                  onClick={handleSignOut}
+                >
+                  Sign out
+                </button>
+              </>
+            ) : (
+              <button
+                type="button"
+                style={styles.authBtn}
+                onClick={handleSignIn}
+                disabled={signingIn}
+              >
+                {signingIn ? 'Signing in…' : 'Sign in with Google'}
+              </button>
+            )}
+          </div>
+        )}
         <div style={styles.controls}>
           <div style={styles.controlGroup}>
             <label style={styles.controlLabel}>Chat Model</label>

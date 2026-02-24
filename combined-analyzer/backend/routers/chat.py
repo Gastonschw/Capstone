@@ -31,6 +31,7 @@ class ChatRequest(BaseModel):
     message: str
     model: Optional[str] = None
     history: List[ChatMessage] = []
+    api_key: Optional[str] = None  # User's TAMU API key; takes precedence over header/env
 
 
 async def event_generator(
@@ -74,8 +75,10 @@ async def chat_about_erd_analysis(
     Chat about an ERD analysis.
 
     Streams responses using Server-Sent Events.
+    Uses api_key from request body first, then header; model from request body.
     """
     history = [{"role": m.role, "content": m.content} for m in request.history]
+    api_key = request.api_key if (request.api_key and request.api_key.strip()) else tamu_api_key
 
     return StreamingResponse(
         event_generator(
@@ -85,7 +88,7 @@ async def chat_about_erd_analysis(
             history,
             db,
             model=request.model,
-            api_key=tamu_api_key,
+            api_key=api_key,
         ),
         media_type="text/event-stream",
         headers={
@@ -107,8 +110,10 @@ async def chat_about_integrity_analysis(
     Chat about an Integrity analysis.
 
     Streams responses using Server-Sent Events.
+    Uses api_key from request body first, then header; model from request body.
     """
     history = [{"role": m.role, "content": m.content} for m in request.history]
+    api_key = request.api_key if (request.api_key and request.api_key.strip()) else tamu_api_key
 
     return StreamingResponse(
         event_generator(
@@ -118,7 +123,7 @@ async def chat_about_integrity_analysis(
             history,
             db,
             model=request.model,
-            api_key=tamu_api_key,
+            api_key=api_key,
         ),
         media_type="text/event-stream",
         headers={

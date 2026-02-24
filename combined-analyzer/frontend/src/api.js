@@ -1,8 +1,32 @@
 import axios from 'axios';
 
+const USER_ID_STORAGE_KEY = 'supabase_user_id';
+
+/** Call this when the user logs in with Supabase (e.g. Google). Pass null to clear. */
+export function setCurrentUserId(userId) {
+  if (userId == null || userId === '') {
+    localStorage.removeItem(USER_ID_STORAGE_KEY);
+  } else {
+    localStorage.setItem(USER_ID_STORAGE_KEY, String(userId));
+  }
+}
+
+/** Current Supabase user id, if set. Used to link GitHub and repos to the user. */
+export function getCurrentUserId() {
+  return localStorage.getItem(USER_ID_STORAGE_KEY) || null;
+}
+
 const api = axios.create({
   baseURL: '/api',
   withCredentials: true,
+});
+
+api.interceptors.request.use((config) => {
+  const userId = getCurrentUserId();
+  if (userId) {
+    config.headers['X-User-Id'] = userId;
+  }
+  return config;
 });
 
 // ============== Repository Management ==============
@@ -57,7 +81,11 @@ export async function uploadFolder(zipFile, name = null) {
 // ============== GitHub OAuth ==============
 
 export function initiateGitHubAuth() {
-  window.location.href = '/api/github/auth';
+  const userId = getCurrentUserId();
+  const url = userId
+    ? `/api/github/auth?user_id=${encodeURIComponent(userId)}`
+    : '/api/github/auth';
+  window.location.href = url;
 }
 
 export async function getGitHubAuthStatus() {
@@ -70,10 +98,12 @@ export async function getGitHubRepos() {
   return response.data;
 }
 
-export async function importGitHubRepo(repoFullName) {
-  const response = await api.post('/github/import', {
-    repo_full_name: repoFullName,
-  });
+export async function importGitHubRepo(repoFullName, apiKey = '') {
+  const body = { repo_full_name: repoFullName };
+  if (apiKey) body.api_key = apiKey;
+  const headers = {};
+  if (apiKey) headers['X-TAMU-API-Key'] = apiKey;
+  const response = await api.post('/github/import', body, { headers });
   return response.data;
 }
 
@@ -101,8 +131,13 @@ export async function getERDAnalysis(analysisId) {
 
 // ============== Integrity Analysis ==============
 
-export async function startIntegrityAnalysis(repositoryId) {
-  const response = await api.post(`/integrity/repository/${repositoryId}/analyze`);
+export async function startIntegrityAnalysis(repositoryId, apiKey = '', model = '') {
+  const body = {};
+  if (apiKey) body.api_key = apiKey;
+  if (model) body.model = model;
+  const headers = {};
+  if (apiKey) headers['X-TAMU-API-Key'] = apiKey;
+  const response = await api.post(`/integrity/repository/${repositoryId}/analyze`, body, { headers });
   return response.data;
 }
 
@@ -171,14 +206,17 @@ export async function sendChatMessage(
   }
 
   try {
+    const body = {
+      message,
+      history: history.map(m => ({ role: m.role, content: m.content })),
+    };
+    if (model) body.model = model;
+    if (apiKey) body.api_key = apiKey;
+
     const response = await fetch(url, {
       method: 'POST',
       headers,
-      body: JSON.stringify({
-        message,
-        model,
-        history: history.map(m => ({ role: m.role, content: m.content })),
-      }),
+      body: JSON.stringify(body),
     });
 
     if (!response.ok) {

@@ -5,23 +5,22 @@ Discovers files for both ERD Analysis and Integrity Analysis.
 Uses AI to identify:
 - ERD images and user story files (for ERD analysis)
 - Code, config, and documentation files (for Integrity analysis)
+
+Uses TAMU API (OpenAI-compatible) so the same API key as chat works for discovery.
 """
 
+import asyncio
 import json
 import os
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass
 
-import anthropic
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, delete
 
 from models.repository import Repository, DiscoveredFile, FileType
-
-
-def get_client():
-    return anthropic.Anthropic()
+from services.chat_service import get_client, TAMU_DEFAULT_MODEL
 
 
 # ============== File Type Detection ==============
@@ -285,12 +284,14 @@ def scan_repository_files(repo_path: str) -> Dict[str, List[Dict]]:
 async def discover_files_with_ai(
     repo_path: str,
     images: List[Dict],
-    text_files: List[Dict]
+    text_files: List[Dict],
+    api_key: Optional[str] = None,
 ) -> Dict[str, List[FileCandidate]]:
     """
     Use AI to intelligently identify ERD images and user story files.
+    Uses TAMU API (OpenAI-compatible) with the given api_key (or env fallback).
     """
-    client = get_client()
+    client = get_client(api_key=api_key)
 
     # Prepare file list for AI analysis
     file_info = []
@@ -334,15 +335,38 @@ Analyze these files and return a JSON object identifying which files are most li
 Only include files you're reasonably confident about (confidence > 50).
 Return ONLY the JSON object, no other text."""
 
-    message = client.messages.create(
-        model="claude-sonnet-4-20250514",
-        max_tokens=2048,
-        messages=[
-            {"role": "user", "content": discovery_prompt}
-        ],
-    )
+    def _call_completion():
+        resp = client.chat.completions.create(
+            model=TAMU_DEFAULT_MODEL,
+            max_tokens=2048,
+            messages=[{"role": "user", "content": discovery_prompt}],
+            temperature=0,
+        )
+        # TAMU/OpenAI may return an object with .choices, or in some cases a dict/str
+        if isinstance(resp, str):
+            return ""
+        if isinstance(resp, dict):
+            choices = resp.get("choices") or []
+            if choices:
+                first = choices[0]
+                msg = first.get("message", first) if isinstance(first, dict) else getattr(first, "message", None)
+                if isinstance(msg, dict):
+                    return msg.get("content") or ""
+                if msg and getattr(msg, "content", None):
+                    return msg.content
+            return ""
+        if getattr(resp, "choices", None) and resp.choices:
+            msg = getattr(resp.choices[0], "message", None)
+            if msg and getattr(msg, "content", None):
+                return msg.content
+        return ""
 
-    response_text = message.content[0].text
+    try:
+        response_text = await asyncio.to_thread(_call_completion)
+    except Exception:
+        response_text = ""
+    if not isinstance(response_text, str):
+        response_text = ""
 
     try:
         # Parse JSON response
@@ -412,12 +436,14 @@ Return ONLY the JSON object, no other text."""
 async def run_file_discovery(
     repo_path: str,
     db: AsyncSession,
-    repository_id: int
+    repository_id: int,
+    api_key: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Run the complete file discovery workflow and save results to database.
 
     Discovers files for both ERD and Integrity analysis.
+    Uses TAMU API when api_key is provided (or from env); same key as chat.
     """
     # Step 1: Scan for all files
     files = scan_repository_files(repo_path)
@@ -426,7 +452,8 @@ async def run_file_discovery(
     discovered_erd = await discover_files_with_ai(
         repo_path,
         files['images'],
-        files['text_files']
+        files['text_files'],
+        api_key=api_key,
     )
 
     # Step 3: Save all discovered files to database

@@ -157,6 +157,15 @@ const styles = {
     fontSize: '13px',
     flexShrink: 0,
   },
+  apiHint: {
+    backgroundColor: '#fff3e0',
+    border: '1px solid #ffb74d',
+    borderRadius: '8px',
+    padding: '14px 18px',
+    marginBottom: '20px',
+    fontSize: '14px',
+    color: '#e65100',
+  },
 };
 
 function getRiskStyle(riskLevel) {
@@ -238,6 +247,11 @@ export default function IntegrityReportView({ analysisId, onBack, chatModel, cha
   ];
 
   const summary = analysis.summary_report || {};
+  const allIncomplete = characteristics.every(
+    ({ data }) => data?.description === 'Analysis incomplete' || data?.description?.includes('No structured result')
+  );
+  const summaryEmpty = !summary.executive_summary && !summary.strengths?.length && !summary.areas_for_improvement?.length;
+  const showApiHint = (allIncomplete || summaryEmpty) && (analysis.overall_score === 50 || !analysis.overall_score);
 
   return (
     <div style={styles.container}>
@@ -245,6 +259,13 @@ export default function IntegrityReportView({ analysisId, onBack, chatModel, cha
         <h2 style={styles.title}>Integrity Analysis Report</h2>
         <button style={styles.backButton} onClick={onBack}>Back to Repository</button>
       </div>
+
+      {showApiHint && (
+        <div style={styles.apiHint}>
+          <strong>API response incomplete.</strong> Ensure the TAMU API key is set (in the analyzer page) or in the backend <code>TAMU_API_KEY</code>, and that the base URL/model match your institution. See{' '}
+          <a href="https://docs.tamus.ai/docs/prod/advanced/api/api-docs" target="_blank" rel="noopener noreferrer">TAMUS AI API docs</a> for details.
+        </div>
+      )}
 
       {/* Summary Section */}
       <div style={styles.summary}>
