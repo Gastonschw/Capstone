@@ -15,6 +15,10 @@ from .github import (
 )
 from .erd_analysis import ERDAnalysisResponse, ERDAnalysisListItem
 from .integrity_analysis import IntegrityAnalysisResponse, IntegrityAnalysisListItem
+from .compliance_analysis import ComplianceAnalysisResponse, ComplianceAnalysisListItem
+from .correctness_analysis import CorrectnessAnalysisResponse, CorrectnessAnalysisListItem
+from .usability_analysis import UsabilityAnalysisResponse, UsabilityAnalysisListItem
+from .maintainability_analysis import MaintainabilityAnalysisResponse, MaintainabilityAnalysisListItem
 
 __all__ = [
     "RepositoryResponse",
@@ -28,4 +32,12 @@ __all__ = [
     "ERDAnalysisListItem",
     "IntegrityAnalysisResponse",
     "IntegrityAnalysisListItem",
+    "ComplianceAnalysisResponse",
+    "ComplianceAnalysisListItem",
+    "CorrectnessAnalysisResponse",
+    "CorrectnessAnalysisListItem",
+    "UsabilityAnalysisResponse",
+    "UsabilityAnalysisListItem",
+    "MaintainabilityAnalysisResponse",
+    "MaintainabilityAnalysisListItem",
 ]

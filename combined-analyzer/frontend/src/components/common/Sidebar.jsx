@@ -112,6 +112,22 @@ const styles = {
     backgroundColor: '#e8f5e9',
     color: '#2e7d32',
   },
+  complianceBadge: {
+    backgroundColor: '#e3f2fd',
+    color: '#1565c0',
+  },
+  correctnessBadge: {
+    backgroundColor: '#f1f8e9',
+    color: '#33691e',
+  },
+  usabilityBadge: {
+    backgroundColor: '#f3e5f5',
+    color: '#6a1b9a',
+  },
+  maintainabilityBadge: {
+    backgroundColor: '#fff3e0',
+    color: '#e65100',
+  },
 };
 
 export default function Sidebar({ repositories, selectedRepo, onRepositorySelect, onNewAnalysis }) {
@@ -170,6 +186,26 @@ export default function Sidebar({ repositories, selectedRepo, onRepositorySelect
                 {repo.integrity_analysis_count > 0 && (
                   <span style={{ ...styles.analysisBadge, ...styles.integrityBadge }}>
                     {repo.integrity_analysis_count} Integrity
+                  </span>
+                )}
+                {repo.compliance_analysis_count > 0 && (
+                  <span style={{ ...styles.analysisBadge, ...styles.complianceBadge }}>
+                    {repo.compliance_analysis_count} Compliance
+                  </span>
+                )}
+                {repo.correctness_analysis_count > 0 && (
+                  <span style={{ ...styles.analysisBadge, ...styles.correctnessBadge }}>
+                    {repo.correctness_analysis_count} Correctness
+                  </span>
+                )}
+                {repo.usability_analysis_count > 0 && (
+                  <span style={{ ...styles.analysisBadge, ...styles.usabilityBadge }}>
+                    {repo.usability_analysis_count} Usability
+                  </span>
+                )}
+                {repo.maintainability_analysis_count > 0 && (
+                  <span style={{ ...styles.analysisBadge, ...styles.maintainabilityBadge }}>
+                    {repo.maintainability_analysis_count} Maintainability
                   </span>
                 )}
               </div>

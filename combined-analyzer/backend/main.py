@@ -18,6 +18,10 @@ from routers import (
     upload_router,
     erd_router,
     integrity_router,
+    compliance_router,
+    correctness_router,
+    usability_router,
+    maintainability_router,
     chat_router,
 )
 
@@ -58,6 +62,10 @@ app.include_router(github_router)
 app.include_router(upload_router)
 app.include_router(erd_router)
 app.include_router(integrity_router)
+app.include_router(compliance_router)
+app.include_router(correctness_router)
+app.include_router(usability_router)
+app.include_router(maintainability_router)
 app.include_router(chat_router)
 
 

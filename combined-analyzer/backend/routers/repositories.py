@@ -41,6 +41,10 @@ async def list_repositories(
         .options(selectinload(Repository.discovered_files))
         .options(selectinload(Repository.erd_analyses))
         .options(selectinload(Repository.integrity_analyses))
+        .options(selectinload(Repository.compliance_analyses))
+        .options(selectinload(Repository.correctness_analyses))
+        .options(selectinload(Repository.usability_analyses))
+        .options(selectinload(Repository.maintainability_analyses))
         .order_by(Repository.created_at.desc())
     )
     if owner_uuid is not None:
@@ -58,6 +62,10 @@ async def list_repositories(
             file_count=len(repo.discovered_files),
             erd_analysis_count=len(repo.erd_analyses),
             integrity_analysis_count=len(repo.integrity_analyses),
+            compliance_analysis_count=len(repo.compliance_analyses),
+            correctness_analysis_count=len(repo.correctness_analyses),
+            usability_analysis_count=len(repo.usability_analyses),
+            maintainability_analysis_count=len(repo.maintainability_analyses),
         )
         for repo in repositories
     ]
@@ -124,16 +132,24 @@ async def update_file_selection(
     )
     files = result.scalars().all()
 
+    selection_field_map = {
+        'erd': 'is_selected_erd',
+        'integrity': 'is_selected_integrity',
+        'compliance': 'is_selected_compliance',
+        'correctness': 'is_selected_correctness',
+        'usability': 'is_selected_usability',
+        'maintainability': 'is_selected_maintainability',
+    }
+
+    field = selection_field_map.get(update.analysis_type)
+    if not field:
+        raise HTTPException(
+            status_code=400,
+            detail=f"analysis_type must be one of: {', '.join(selection_field_map.keys())}"
+        )
+
     for file in files:
-        if update.analysis_type == 'erd':
-            file.is_selected_erd = update.is_selected
-        elif update.analysis_type == 'integrity':
-            file.is_selected_integrity = update.is_selected
-        else:
-            raise HTTPException(
-                status_code=400,
-                detail="analysis_type must be 'erd' or 'integrity'"
-            )
+        setattr(file, field, update.is_selected)
 
     await db.commit()
 

@@ -20,6 +20,10 @@ from .folder_service import (
 from .discovery_service import run_file_discovery, run_discovery_only
 from .erd_analysis_service import run_erd_analysis
 from .integrity_analysis_service import run_integrity_analysis
+from .compliance_analysis_service import run_compliance_analysis
+from .correctness_analysis_service import run_correctness_analysis
+from .usability_analysis_service import run_usability_analysis
+from .maintainability_analysis_service import run_maintainability_analysis
 
 __all__ = [
     # GitHub
@@ -41,4 +45,8 @@ __all__ = [
     # Analysis
     "run_erd_analysis",
     "run_integrity_analysis",
+    "run_compliance_analysis",
+    "run_correctness_analysis",
+    "run_usability_analysis",
+    "run_maintainability_analysis",
 ]

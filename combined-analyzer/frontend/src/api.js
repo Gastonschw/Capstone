@@ -151,10 +151,107 @@ export async function getIntegrityAnalysis(analysisId) {
   return response.data;
 }
 
+// ============== Compliance Analysis ==============
+
+export async function startComplianceAnalysis(repositoryId, apiKey = '', model = '') {
+  const body = {};
+  if (apiKey) body.api_key = apiKey;
+  if (model) body.model = model;
+  const headers = {};
+  if (apiKey) headers['X-TAMU-API-Key'] = apiKey;
+  const response = await api.post(`/compliance/repository/${repositoryId}/analyze`, body, { headers });
+  return response.data;
+}
+
+export async function listComplianceAnalyses(repositoryId) {
+  const response = await api.get(`/compliance/repository/${repositoryId}/analyses`);
+  return response.data;
+}
+
+export async function getComplianceAnalysis(analysisId) {
+  const response = await api.get(`/compliance/analysis/${analysisId}`);
+  return response.data;
+}
+
+// ============== Correctness Analysis ==============
+
+export async function startCorrectnessAnalysis(repositoryId, apiKey = '', model = '') {
+  const body = {};
+  if (apiKey) body.api_key = apiKey;
+  if (model) body.model = model;
+  const headers = {};
+  if (apiKey) headers['X-TAMU-API-Key'] = apiKey;
+  const response = await api.post(`/correctness/repository/${repositoryId}/analyze`, body, { headers });
+  return response.data;
+}
+
+export async function listCorrectnessAnalyses(repositoryId) {
+  const response = await api.get(`/correctness/repository/${repositoryId}/analyses`);
+  return response.data;
+}
+
+export async function getCorrectnessAnalysis(analysisId) {
+  const response = await api.get(`/correctness/analysis/${analysisId}`);
+  return response.data;
+}
+
+// ============== Usability Analysis ==============
+
+export async function startUsabilityAnalysis(repositoryId, apiKey = '', model = '') {
+  const body = {};
+  if (apiKey) body.api_key = apiKey;
+  if (model) body.model = model;
+  const headers = {};
+  if (apiKey) headers['X-TAMU-API-Key'] = apiKey;
+  const response = await api.post(`/usability/repository/${repositoryId}/analyze`, body, { headers });
+  return response.data;
+}
+
+export async function listUsabilityAnalyses(repositoryId) {
+  const response = await api.get(`/usability/repository/${repositoryId}/analyses`);
+  return response.data;
+}
+
+export async function getUsabilityAnalysis(analysisId) {
+  const response = await api.get(`/usability/analysis/${analysisId}`);
+  return response.data;
+}
+
+// ============== Maintainability Analysis ==============
+
+export async function startMaintainabilityAnalysis(repositoryId, apiKey = '', model = '') {
+  const body = {};
+  if (apiKey) body.api_key = apiKey;
+  if (model) body.model = model;
+  const headers = {};
+  if (apiKey) headers['X-TAMU-API-Key'] = apiKey;
+  const response = await api.post(`/maintainability/repository/${repositoryId}/analyze`, body, { headers });
+  return response.data;
+}
+
+export async function listMaintainabilityAnalyses(repositoryId) {
+  const response = await api.get(`/maintainability/repository/${repositoryId}/analyses`);
+  return response.data;
+}
+
+export async function getMaintainabilityAnalysis(analysisId) {
+  const response = await api.get(`/maintainability/analysis/${analysisId}`);
+  return response.data;
+}
+
 // ============== Polling ==============
 
+const analysisGetters = {
+  erd: getERDAnalysis,
+  integrity: getIntegrityAnalysis,
+  compliance: getComplianceAnalysis,
+  correctness: getCorrectnessAnalysis,
+  usability: getUsabilityAnalysis,
+  maintainability: getMaintainabilityAnalysis,
+};
+
 export async function pollAnalysis(type, analysisId, onUpdate, intervalMs = 2000) {
-  const getAnalysis = type === 'erd' ? getERDAnalysis : getIntegrityAnalysis;
+  const getAnalysis = analysisGetters[type] || getIntegrityAnalysis;
 
   const poll = async () => {
     try {

@@ -6,6 +6,10 @@ import {
   deleteRepository,
   startERDAnalysis,
   startIntegrityAnalysis,
+  startComplianceAnalysis,
+  startCorrectnessAnalysis,
+  startUsabilityAnalysis,
+  startMaintainabilityAnalysis,
   pollAnalysis,
 } from '../../api';
 import AnalysisTypeSelector from './AnalysisTypeSelector';
@@ -156,7 +160,10 @@ export default function RepositoryBrowser({ repositoryId, onBack, onAnalysisComp
   const [refreshing, setRefreshing] = useState(false);
   const [analyzing, setAnalyzing] = useState(false);
   const [error, setError] = useState(null);
-  const [analysisTypes, setAnalysisTypes] = useState({ erd: false, integrity: false });
+  const [analysisTypes, setAnalysisTypes] = useState({
+    erd: false, integrity: false, compliance: false, correctness: false,
+    usability: false, maintainability: false,
+  });
 
   useEffect(() => {
     loadRepository();
@@ -175,9 +182,18 @@ export default function RepositoryBrowser({ repositoryId, onBack, onAnalysisComp
     }
   };
 
+  const fieldToType = {
+    is_selected_erd: 'erd',
+    is_selected_integrity: 'integrity',
+    is_selected_compliance: 'compliance',
+    is_selected_correctness: 'correctness',
+    is_selected_usability: 'usability',
+    is_selected_maintainability: 'maintainability',
+  };
+
   const handleFileToggle = async (fileId, field, currentValue) => {
     try {
-      const analysisType = field === 'is_selected_erd' ? 'erd' : 'integrity';
+      const analysisType = fieldToType[field] || 'integrity';
       await updateFileSelection(repositoryId, [fileId], !currentValue, analysisType);
       setRepository((prev) => ({
         ...prev,
@@ -201,7 +217,7 @@ export default function RepositoryBrowser({ repositoryId, onBack, onAnalysisComp
       })
       .map((f) => f.id);
 
-    const analysisType = field === 'is_selected_erd' ? 'erd' : 'integrity';
+    const analysisType = fieldToType[field] || 'integrity';
 
     try {
       await updateFileSelection(repositoryId, fileIds, selected, analysisType);
@@ -249,7 +265,8 @@ export default function RepositoryBrowser({ repositoryId, onBack, onAnalysisComp
   };
 
   const handleAnalyze = async () => {
-    if (!analysisTypes.erd && !analysisTypes.integrity) {
+    const anySelected = Object.values(analysisTypes).some(Boolean);
+    if (!anySelected) {
       setError('Please select at least one analysis type');
       return;
     }
@@ -257,24 +274,27 @@ export default function RepositoryBrowser({ repositoryId, onBack, onAnalysisComp
     setAnalyzing(true);
     setError(null);
 
+    const starters = {
+      erd: () => startERDAnalysis(repositoryId),
+      integrity: () => startIntegrityAnalysis(repositoryId, tamuApiKey, tamuModel),
+      compliance: () => startComplianceAnalysis(repositoryId, tamuApiKey, tamuModel),
+      correctness: () => startCorrectnessAnalysis(repositoryId, tamuApiKey, tamuModel),
+      usability: () => startUsabilityAnalysis(repositoryId, tamuApiKey, tamuModel),
+      maintainability: () => startMaintainabilityAnalysis(repositoryId, tamuApiKey, tamuModel),
+    };
+
+    // Find the first selected analysis type
+    const selectedType = Object.keys(analysisTypes).find((t) => analysisTypes[t]);
+    if (!selectedType) return;
+
     try {
-      if (analysisTypes.erd) {
-        const analysis = await startERDAnalysis(repositoryId);
-        pollAnalysis('erd', analysis.id, (updatedAnalysis) => {
-          if (updatedAnalysis.status === 'completed' || updatedAnalysis.status === 'failed') {
-            setAnalyzing(false);
-            onAnalysisComplete(updatedAnalysis, 'erd');
-          }
-        });
-      } else if (analysisTypes.integrity) {
-        const analysis = await startIntegrityAnalysis(repositoryId, tamuApiKey, tamuModel);
-        pollAnalysis('integrity', analysis.id, (updatedAnalysis) => {
-          if (updatedAnalysis.status === 'completed' || updatedAnalysis.status === 'failed') {
-            setAnalyzing(false);
-            onAnalysisComplete(updatedAnalysis, 'integrity');
-          }
-        });
-      }
+      const analysis = await starters[selectedType]();
+      pollAnalysis(selectedType, analysis.id, (updatedAnalysis) => {
+        if (updatedAnalysis.status === 'completed' || updatedAnalysis.status === 'failed') {
+          setAnalyzing(false);
+          onAnalysisComplete(updatedAnalysis, selectedType);
+        }
+      });
     } catch (err) {
       setError(err.response?.data?.detail || 'Failed to start analysis');
       setAnalyzing(false);
@@ -316,8 +336,22 @@ export default function RepositoryBrowser({ repositoryId, onBack, onAnalysisComp
   const canAnalyzeErd = erdFiles.filter((f) => f.file_type === 'erd_image' && f.is_selected_erd).length > 0 &&
                         erdFiles.filter((f) => f.file_type === 'user_story' && f.is_selected_erd).length > 0;
   const canAnalyzeIntegrity = selectedIntegrityCount > 0;
+  // New analysis types reuse the same code/config files as integrity
+  const canAnalyzeCompliance = integrityFiles.filter((f) => f.is_selected_compliance).length > 0;
+  const canAnalyzeCorrectness = integrityFiles.filter((f) => f.is_selected_correctness).length > 0;
+  const canAnalyzeUsability = integrityFiles.filter((f) => f.is_selected_usability).length > 0;
+  const canAnalyzeMaintainability = integrityFiles.filter((f) => f.is_selected_maintainability).length > 0;
 
-  const canAnalyze = (analysisTypes.erd && canAnalyzeErd) || (analysisTypes.integrity && canAnalyzeIntegrity);
+  const canAnalyzeMap = {
+    erd: canAnalyzeErd,
+    integrity: canAnalyzeIntegrity,
+    compliance: canAnalyzeCompliance,
+    correctness: canAnalyzeCorrectness,
+    usability: canAnalyzeUsability,
+    maintainability: canAnalyzeMaintainability,
+  };
+
+  const canAnalyze = Object.keys(analysisTypes).some((t) => analysisTypes[t] && canAnalyzeMap[t]);
 
   return (
     <div style={styles.container}>
@@ -379,7 +413,7 @@ export default function RepositoryBrowser({ repositoryId, onBack, onAnalysisComp
         <div style={styles.section}>
           <h3 style={styles.sectionTitle}>
             <span style={styles.sectionIcon}>&#128274;</span>
-            Integrity Analysis Files ({selectedIntegrityCount} selected)
+            Code Analysis Files ({selectedIntegrityCount} selected for Integrity)
           </h3>
           <FileList
             files={integrityFiles}
@@ -392,12 +426,85 @@ export default function RepositoryBrowser({ repositoryId, onBack, onAnalysisComp
         </div>
       </div>
 
+      {(analysisTypes.compliance || analysisTypes.correctness || analysisTypes.usability || analysisTypes.maintainability) && (
+        <div style={{ ...styles.content, marginTop: '20px' }}>
+          {analysisTypes.compliance && (
+            <div style={styles.section}>
+              <h3 style={styles.sectionTitle}>
+                <span style={styles.sectionIcon}>&#9989;</span>
+                Compliance Files ({integrityFiles.filter((f) => f.is_selected_compliance).length} selected)
+              </h3>
+              <FileList
+                files={integrityFiles}
+                selectionField="is_selected_compliance"
+                onToggle={handleFileToggle}
+                onSelectAll={(selected) => handleSelectAll('integrity', 'is_selected_compliance', selected)}
+                scoreField="relevance_score"
+                scoreLabel="Relevance"
+              />
+            </div>
+          )}
+          {analysisTypes.correctness && (
+            <div style={styles.section}>
+              <h3 style={styles.sectionTitle}>
+                <span style={styles.sectionIcon}>&#10004;</span>
+                Correctness Files ({integrityFiles.filter((f) => f.is_selected_correctness).length} selected)
+              </h3>
+              <FileList
+                files={integrityFiles}
+                selectionField="is_selected_correctness"
+                onToggle={handleFileToggle}
+                onSelectAll={(selected) => handleSelectAll('integrity', 'is_selected_correctness', selected)}
+                scoreField="relevance_score"
+                scoreLabel="Relevance"
+              />
+            </div>
+          )}
+          {analysisTypes.usability && (
+            <div style={styles.section}>
+              <h3 style={styles.sectionTitle}>
+                <span style={styles.sectionIcon}>&#128100;</span>
+                Usability Files ({integrityFiles.filter((f) => f.is_selected_usability).length} selected)
+              </h3>
+              <FileList
+                files={integrityFiles}
+                selectionField="is_selected_usability"
+                onToggle={handleFileToggle}
+                onSelectAll={(selected) => handleSelectAll('integrity', 'is_selected_usability', selected)}
+                scoreField="relevance_score"
+                scoreLabel="Relevance"
+              />
+            </div>
+          )}
+          {analysisTypes.maintainability && (
+            <div style={styles.section}>
+              <h3 style={styles.sectionTitle}>
+                <span style={styles.sectionIcon}>&#9881;</span>
+                Maintainability Files ({integrityFiles.filter((f) => f.is_selected_maintainability).length} selected)
+              </h3>
+              <FileList
+                files={integrityFiles}
+                selectionField="is_selected_maintainability"
+                onToggle={handleFileToggle}
+                onSelectAll={(selected) => handleSelectAll('integrity', 'is_selected_maintainability', selected)}
+                scoreField="relevance_score"
+                scoreLabel="Relevance"
+              />
+            </div>
+          )}
+        </div>
+      )}
+
       <div style={styles.analyzeSection}>
         <AnalysisTypeSelector
           analysisTypes={analysisTypes}
           onChange={setAnalysisTypes}
           canAnalyzeErd={canAnalyzeErd}
           canAnalyzeIntegrity={canAnalyzeIntegrity}
+          canAnalyzeCompliance={canAnalyzeCompliance}
+          canAnalyzeCorrectness={canAnalyzeCorrectness}
+          canAnalyzeUsability={canAnalyzeUsability}
+          canAnalyzeMaintainability={canAnalyzeMaintainability}
         />
 
         <button
@@ -419,7 +526,19 @@ export default function RepositoryBrowser({ repositoryId, onBack, onAnalysisComp
             {analysisTypes.integrity && !canAnalyzeIntegrity && (
               <>For Integrity analysis, select at least one code or config file. </>
             )}
-            {!analysisTypes.erd && !analysisTypes.integrity && (
+            {analysisTypes.compliance && !canAnalyzeCompliance && (
+              <>For Compliance analysis, select code/config files below. </>
+            )}
+            {analysisTypes.correctness && !canAnalyzeCorrectness && (
+              <>For Correctness analysis, select code/config files below. </>
+            )}
+            {analysisTypes.usability && !canAnalyzeUsability && (
+              <>For Usability analysis, select code/config files below. </>
+            )}
+            {analysisTypes.maintainability && !canAnalyzeMaintainability && (
+              <>For Maintainability analysis, select code/config files below. </>
+            )}
+            {!Object.values(analysisTypes).some(Boolean) && (
               <>Select an analysis type above to begin. </>
             )}
           </p>

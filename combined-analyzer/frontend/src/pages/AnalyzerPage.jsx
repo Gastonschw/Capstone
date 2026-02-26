@@ -5,6 +5,10 @@ import UploadForm from '../components/upload/UploadForm';
 import RepositoryBrowser from '../components/repository/RepositoryBrowser';
 import ERDReportView from '../components/erd/ERDReportView';
 import IntegrityReportView from '../components/integrity/IntegrityReportView';
+import ComplianceReportView from '../components/compliance/ComplianceReportView';
+import CorrectnessReportView from '../components/correctness/CorrectnessReportView';
+import UsabilityReportView from '../components/usability/UsabilityReportView';
+import MaintainabilityReportView from '../components/maintainability/MaintainabilityReportView';
 import { listRepositories, listChatModels, setCurrentUserId } from '../api';
 import { supabase, isSupabaseConfigured } from '../lib/supabaseClient';
 
@@ -202,7 +206,7 @@ export default function AnalyzerPage() {
     setCurrentAnalysis(analysis);
     setAnalysisType(type);
     setActiveReportTab(type);
-    setView(type === 'erd' ? 'erd-report' : 'integrity-report');
+    setView(`${type}-report`);
   };
 
   const handleBackToRepository = () => {
@@ -247,62 +251,54 @@ export default function AnalyzerPage() {
         ) : null;
 
       case 'erd-report':
-        return currentAnalysis ? (
-          <div>
-            <div style={styles.tabContainer}>
-              <button
-                style={{ ...styles.tab, ...(activeReportTab === 'erd' ? styles.tabActive : styles.tabInactive) }}
-                onClick={() => setActiveReportTab('erd')}
-              >
-                ERD Analysis
-              </button>
-              <button
-                style={{ ...styles.tab, ...(activeReportTab === 'integrity' ? styles.tabActive : styles.tabInactive) }}
-                onClick={() => {
-                  setActiveReportTab('integrity');
-                  setView('integrity-report');
-                }}
-              >
-                Integrity Analysis
-              </button>
-            </div>
-            <ERDReportView
-              analysisId={currentAnalysis.id}
-              onBack={handleBackToRepository}
-              chatModel={chatModel}
-              chatApiKey={chatApiKey}
-            />
-          </div>
-        ) : null;
-
       case 'integrity-report':
-        return currentAnalysis ? (
+      case 'compliance-report':
+      case 'correctness-report':
+      case 'usability-report':
+      case 'maintainability-report': {
+        if (!currentAnalysis) return null;
+        const reportTabs = [
+          { key: 'erd', label: 'ERD' },
+          { key: 'integrity', label: 'Integrity' },
+          { key: 'compliance', label: 'Compliance' },
+          { key: 'correctness', label: 'Correctness' },
+          { key: 'usability', label: 'Usability' },
+          { key: 'maintainability', label: 'Maintainability' },
+        ];
+        const ReportComponents = {
+          erd: ERDReportView,
+          integrity: IntegrityReportView,
+          compliance: ComplianceReportView,
+          correctness: CorrectnessReportView,
+          usability: UsabilityReportView,
+          maintainability: MaintainabilityReportView,
+        };
+        const ActiveReport = ReportComponents[activeReportTab] || IntegrityReportView;
+        return (
           <div>
             <div style={styles.tabContainer}>
-              <button
-                style={{ ...styles.tab, ...(activeReportTab === 'erd' ? styles.tabActive : styles.tabInactive) }}
-                onClick={() => {
-                  setActiveReportTab('erd');
-                  setView('erd-report');
-                }}
-              >
-                ERD Analysis
-              </button>
-              <button
-                style={{ ...styles.tab, ...(activeReportTab === 'integrity' ? styles.tabActive : styles.tabInactive) }}
-                onClick={() => setActiveReportTab('integrity')}
-              >
-                Integrity Analysis
-              </button>
+              {reportTabs.map((t) => (
+                <button
+                  key={t.key}
+                  style={{ ...styles.tab, ...(activeReportTab === t.key ? styles.tabActive : styles.tabInactive) }}
+                  onClick={() => {
+                    setActiveReportTab(t.key);
+                    setView(`${t.key}-report`);
+                  }}
+                >
+                  {t.label}
+                </button>
+              ))}
             </div>
-            <IntegrityReportView
+            <ActiveReport
               analysisId={currentAnalysis.id}
               onBack={handleBackToRepository}
               chatModel={chatModel}
               chatApiKey={chatApiKey}
             />
           </div>
-        ) : null;
+        );
+      }
 
       default:
         return null;

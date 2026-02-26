@@ -59,6 +59,26 @@ class Repository(Base):
         back_populates="repository",
         cascade="all, delete-orphan"
     )
+    compliance_analyses = relationship(
+        "ComplianceAnalysis",
+        back_populates="repository",
+        cascade="all, delete-orphan"
+    )
+    correctness_analyses = relationship(
+        "CorrectnessAnalysis",
+        back_populates="repository",
+        cascade="all, delete-orphan"
+    )
+    usability_analyses = relationship(
+        "UsabilityAnalysis",
+        back_populates="repository",
+        cascade="all, delete-orphan"
+    )
+    maintainability_analyses = relationship(
+        "MaintainabilityAnalysis",
+        back_populates="repository",
+        cascade="all, delete-orphan"
+    )
 
 
 class DiscoveredFile(Base):
@@ -84,9 +104,13 @@ class DiscoveredFile(Base):
     # Content preview
     content_preview = Column(Text, nullable=True)  # First ~500 chars
 
-    # Dual selection columns - files can be selected for either or both analysis types
+    # Selection columns - files can be selected for any analysis type
     is_selected_erd = Column(Boolean, default=False)
     is_selected_integrity = Column(Boolean, default=False)
+    is_selected_compliance = Column(Boolean, default=False)
+    is_selected_correctness = Column(Boolean, default=False)
+    is_selected_usability = Column(Boolean, default=False)
+    is_selected_maintainability = Column(Boolean, default=False)
 
     # Relationship
     repository = relationship("Repository", back_populates="discovered_files")

@@ -18,6 +18,10 @@ class DiscoveredFileResponse(BaseModel):
     content_preview: Optional[str] = None
     is_selected_erd: bool
     is_selected_integrity: bool
+    is_selected_compliance: bool = False
+    is_selected_correctness: bool = False
+    is_selected_usability: bool = False
+    is_selected_maintainability: bool = False
 
     class Config:
         from_attributes = True
@@ -48,6 +52,10 @@ class RepositoryListResponse(BaseModel):
     file_count: int = 0
     erd_analysis_count: int = 0
     integrity_analysis_count: int = 0
+    compliance_analysis_count: int = 0
+    correctness_analysis_count: int = 0
+    usability_analysis_count: int = 0
+    maintainability_analysis_count: int = 0
 
     class Config:
         from_attributes = True
@@ -57,4 +65,4 @@ class FileSelectionUpdate(BaseModel):
     """Request schema for updating file selections."""
     file_ids: List[int]
     is_selected: bool
-    analysis_type: str  # 'erd' or 'integrity'
+    analysis_type: str  # 'erd', 'integrity', 'compliance', 'correctness', 'usability', 'maintainability'
