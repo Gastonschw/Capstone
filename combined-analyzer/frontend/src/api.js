@@ -253,17 +253,27 @@ const analysisGetters = {
 export async function pollAnalysis(type, analysisId, onUpdate, intervalMs = 2000) {
   const getAnalysis = analysisGetters[type] || getIntegrityAnalysis;
 
+  let errorCount = 0;
+  const maxErrors = 5;
+
   const poll = async () => {
     try {
       const analysis = await getAnalysis(analysisId);
+      errorCount = 0;
       onUpdate(analysis);
 
       if (analysis.status === 'pending' || analysis.status === 'processing') {
         setTimeout(poll, intervalMs);
       }
     } catch (err) {
-      console.error('Poll error:', err);
-      setTimeout(poll, intervalMs * 2);
+      errorCount++;
+      console.error(`Poll error for ${type}/${analysisId} (${errorCount}/${maxErrors}):`, err);
+      if (errorCount < maxErrors) {
+        setTimeout(poll, intervalMs * 2);
+      } else {
+        console.error(`Giving up polling ${type}/${analysisId} after ${maxErrors} errors`);
+        onUpdate({ status: 'failed', error: 'Polling failed' });
+      }
     }
   };
 

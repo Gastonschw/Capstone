@@ -81,7 +81,7 @@ export default function AnalyzerPage() {
   const [repositories, setRepositories] = useState([]);
   const [selectedRepo, setSelectedRepo] = useState(null);
   const [view, setView] = useState('upload');
-  const [currentAnalysis, setCurrentAnalysis] = useState(null);
+  const [analysisMap, setAnalysisMap] = useState({});
   const [analysisType, setAnalysisType] = useState(null);
   const [activeReportTab, setActiveReportTab] = useState('erd');
   const [chatApiKey, setChatApiKey] = useState(() => readFromStorage(CHAT_API_KEY_STORAGE));
@@ -203,7 +203,7 @@ export default function AnalyzerPage() {
   };
 
   const handleAnalysisComplete = (analysis, type) => {
-    setCurrentAnalysis(analysis);
+    setAnalysisMap(prev => ({ ...prev, [type]: analysis }));
     setAnalysisType(type);
     setActiveReportTab(type);
     setView(`${type}-report`);
@@ -211,7 +211,7 @@ export default function AnalyzerPage() {
 
   const handleBackToRepository = () => {
     setView('browser');
-    setCurrentAnalysis(null);
+    setAnalysisMap({});
   };
 
   const handleBackToUpload = () => {
@@ -256,15 +256,7 @@ export default function AnalyzerPage() {
       case 'correctness-report':
       case 'usability-report':
       case 'maintainability-report': {
-        if (!currentAnalysis) return null;
-        const reportTabs = [
-          { key: 'erd', label: 'ERD' },
-          { key: 'integrity', label: 'Integrity' },
-          { key: 'compliance', label: 'Compliance' },
-          { key: 'correctness', label: 'Correctness' },
-          { key: 'usability', label: 'Usability' },
-          { key: 'maintainability', label: 'Maintainability' },
-        ];
+        if (Object.keys(analysisMap).length === 0) return null;
         const ReportComponents = {
           erd: ERDReportView,
           integrity: IntegrityReportView,
@@ -273,11 +265,17 @@ export default function AnalyzerPage() {
           usability: UsabilityReportView,
           maintainability: MaintainabilityReportView,
         };
+        // Only show tabs for types that have results
+        const availableTabs = Object.keys(analysisMap).map((key) => ({
+          key,
+          label: key.charAt(0).toUpperCase() + key.slice(1),
+        }));
+        const activeAnalysis = analysisMap[activeReportTab];
         const ActiveReport = ReportComponents[activeReportTab] || IntegrityReportView;
         return (
           <div>
             <div style={styles.tabContainer}>
-              {reportTabs.map((t) => (
+              {availableTabs.map((t) => (
                 <button
                   key={t.key}
                   style={{ ...styles.tab, ...(activeReportTab === t.key ? styles.tabActive : styles.tabInactive) }}
@@ -290,12 +288,18 @@ export default function AnalyzerPage() {
                 </button>
               ))}
             </div>
-            <ActiveReport
-              analysisId={currentAnalysis.id}
-              onBack={handleBackToRepository}
-              chatModel={chatModel}
-              chatApiKey={chatApiKey}
-            />
+            {activeAnalysis ? (
+              <ActiveReport
+                analysisId={activeAnalysis.id}
+                onBack={handleBackToRepository}
+                chatModel={chatModel}
+                chatApiKey={chatApiKey}
+              />
+            ) : (
+              <div style={{ textAlign: 'center', padding: '40px', color: '#666' }}>
+                <p>No {activeReportTab} analysis results available.</p>
+              </div>
+            )}
           </div>
         );
       }

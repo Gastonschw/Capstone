@@ -283,18 +283,33 @@ export default function RepositoryBrowser({ repositoryId, onBack, onAnalysisComp
       maintainability: () => startMaintainabilityAnalysis(repositoryId, tamuApiKey, tamuModel),
     };
 
-    // Find the first selected analysis type
-    const selectedType = Object.keys(analysisTypes).find((t) => analysisTypes[t]);
-    if (!selectedType) return;
+    const selectedTypes = Object.keys(analysisTypes).filter((t) => analysisTypes[t]);
+    if (selectedTypes.length === 0) return;
+
+    let completedCount = 0;
+    const total = selectedTypes.length;
 
     try {
-      const analysis = await starters[selectedType]();
-      pollAnalysis(selectedType, analysis.id, (updatedAnalysis) => {
-        if (updatedAnalysis.status === 'completed' || updatedAnalysis.status === 'failed') {
-          setAnalyzing(false);
-          onAnalysisComplete(updatedAnalysis, selectedType);
-        }
-      });
+      // Start each analysis sequentially to avoid race conditions
+      const startedAnalyses = [];
+      for (const type of selectedTypes) {
+        const analysis = await starters[type]();
+        console.log(`Started ${type} analysis with id=${analysis.id}`);
+        startedAnalyses.push({ type, id: analysis.id });
+      }
+
+      // Poll each analysis independently
+      for (const { type, id } of startedAnalyses) {
+        pollAnalysis(type, id, (updatedAnalysis) => {
+          if (updatedAnalysis.status === 'completed' || updatedAnalysis.status === 'failed') {
+            completedCount++;
+            onAnalysisComplete(updatedAnalysis, type);
+            if (completedCount >= total) {
+              setAnalyzing(false);
+            }
+          }
+        });
+      }
     } catch (err) {
       setError(err.response?.data?.detail || 'Failed to start analysis');
       setAnalyzing(false);
