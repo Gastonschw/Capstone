@@ -3,6 +3,7 @@ services:
   - type: web
     name: combined-analyzer-api
     runtime: python
+    plan: free
     region: oregon
     rootDir: combined-analyzer/backend
     buildCommand: pip install -r requirements.txt
