@@ -29,7 +29,6 @@ services:
   - type: web
     name: combined-analyzer-frontend
     runtime: static
-    region: oregon
     rootDir: combined-analyzer/frontend
     buildCommand: npm install && npm run build
     staticPublishPath: dist
