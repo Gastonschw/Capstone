@@ -76,6 +76,9 @@ else:
 # For startup log and /api/health: "postgres" when using Supabase, "sqlite" otherwise
 DATABASE_KIND = "postgres" if _use_postgres else "sqlite"
 
+# Frontend URL (for OAuth callback redirects)
+FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:5173")
+
 # GitHub OAuth
 GITHUB_CLIENT_ID = os.getenv("GITHUB_CLIENT_ID", "")
 GITHUB_CLIENT_SECRET = os.getenv("GITHUB_CLIENT_SECRET", "")

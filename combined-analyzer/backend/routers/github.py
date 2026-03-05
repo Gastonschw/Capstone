@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import get_db
 from schemas.github import GitHubRepo, GitHubImportRequest, GitHubAuthStatus
+from config import FRONTEND_URL
 from services.github_service import (
     get_github_auth_url,
     exchange_code_for_token,
@@ -82,7 +83,7 @@ async def github_callback(
     # Verify state matches session (CSRF protection)
     if session_id != expected_session_id:
         return RedirectResponse(
-            url="/?github_auth=error&message=Invalid+state+parameter"
+            url=f"{FRONTEND_URL}/?github_auth=error&message=Invalid+state+parameter"
         )
 
     try:
@@ -93,7 +94,7 @@ async def github_callback(
         if not access_token:
             error = token_response.get("error_description", "Failed to get access token")
             return RedirectResponse(
-                url=f"/?github_auth=error&message={error}"
+                url=f"{FRONTEND_URL}/?github_auth=error&message={error}"
             )
 
         # Get user info
@@ -102,11 +103,11 @@ async def github_callback(
         # Save token (optionally linked to Supabase user)
         await save_github_token(db, session_id, access_token, user_info, user_id=user_id)
 
-        return RedirectResponse(url="/?github_auth=success")
+        return RedirectResponse(url=f"{FRONTEND_URL}/?github_auth=success")
 
     except Exception as e:
         return RedirectResponse(
-            url=f"/?github_auth=error&message={str(e)}"
+            url=f"{FRONTEND_URL}/?github_auth=error&message={str(e)}"
         )
 
 

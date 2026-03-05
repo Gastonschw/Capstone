@@ -16,8 +16,10 @@ export function getCurrentUserId() {
   return localStorage.getItem(USER_ID_STORAGE_KEY) || null;
 }
 
+const API_BASE = import.meta.env.VITE_API_URL || '/api';
+
 const api = axios.create({
-  baseURL: '/api',
+  baseURL: API_BASE,
   withCredentials: true,
 });
 
@@ -83,8 +85,8 @@ export async function uploadFolder(zipFile, name = null) {
 export function initiateGitHubAuth() {
   const userId = getCurrentUserId();
   const url = userId
-    ? `/api/github/auth?user_id=${encodeURIComponent(userId)}`
-    : '/api/github/auth';
+    ? `${API_BASE}/github/auth?user_id=${encodeURIComponent(userId)}`
+    : `${API_BASE}/github/auth`;
   window.location.href = url;
 }
 
@@ -303,7 +305,7 @@ export async function sendChatMessage(
   onDone,
   onError
 ) {
-  const url = `/api/chat/${analysisType}/${analysisId}`;
+  const url = `${API_BASE}/chat/${analysisType}/${analysisId}`;
   const headers = {
     'Content-Type': 'application/json',
   };
