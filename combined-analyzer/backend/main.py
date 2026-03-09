@@ -19,6 +19,7 @@ from routers import (
     erd_router,
     integrity_router,
     chat_router,
+    classes_router,
 )
 
 
@@ -59,6 +60,7 @@ app.include_router(upload_router)
 app.include_router(erd_router)
 app.include_router(integrity_router)
 app.include_router(chat_router)
+app.include_router(classes_router)
 
 
 @app.get("/api/health")

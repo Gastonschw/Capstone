@@ -185,6 +185,28 @@ export async function listChatModels(apiKey = '') {
   return response.data;
 }
 
+// ============== Classes (Teacher/Student) ==============
+
+export async function createClass(name, description = '') {
+  const response = await api.post('/classes', { name, description });
+  return response.data;
+}
+
+export async function joinClassByCode(joinCode) {
+  const response = await api.post('/classes/join', { join_code: String(joinCode).trim() });
+  return response.data;
+}
+
+export async function listMyClasses() {
+  const response = await api.get('/classes');
+  return response.data;
+}
+
+export async function deleteClass(classId) {
+  const response = await api.delete(`/classes/${classId}`);
+  return response.data;
+}
+
 export async function sendChatMessage(
   analysisType,
   analysisId,
