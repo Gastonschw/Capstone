@@ -12,6 +12,7 @@ from .correctness_analysis import router as correctness_router
 from .usability_analysis import router as usability_router
 from .maintainability_analysis import router as maintainability_router
 from .chat import router as chat_router
+from .classes import router as classes_router
 
 __all__ = [
     "repositories_router",
@@ -24,4 +25,5 @@ __all__ = [
     "usability_router",
     "maintainability_router",
     "chat_router",
+    "classes_router",
 ]

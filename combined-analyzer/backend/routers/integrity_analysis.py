@@ -101,8 +101,17 @@ async def run_analysis_task(
             await db.commit()
 
         except Exception as e:
+            # Log full stack trace for debugging, but return a concise message to the UI
+            import logging
+
+            logging.getLogger(__name__).exception(
+                "Integrity analysis background task failed for analysis_id=%s repo_id=%s",
+                analysis_id,
+                repository_id,
+            )
+
             analysis.status = "failed"
-            analysis.error_message = str(e)
+            analysis.error_message = str(e) or "Internal Server Error"
             analysis.completed_at = datetime.utcnow()
             await db.commit()
 

@@ -226,6 +226,7 @@ export default function AnalyzerPage() {
         return (
           <div>
             <UploadForm onRepositoryCreated={handleRepositoryCreated} tamuApiKey={chatApiKey} />
+            <ClassesPanel />
             {repositories.length === 0 && (
               <div style={styles.welcome}>
                 <h2 style={styles.welcomeTitle}>Welcome to Combined Analyzer</h2>
