@@ -225,17 +225,39 @@ export default function AnalysisChat({ analysisId, analysisType, chatModel, chat
     }
   };
 
-  const suggestionQuestions = analysisType === 'erd'
-    ? [
-        'What entities are missing from my ERD?',
-        'How can I improve the coverage score?',
-        'Explain the relationship issues found.',
-      ]
-    : [
-        'What are the most critical security issues?',
-        'How can I improve authentication?',
-        'Explain the confidentiality findings.',
-      ];
+  const suggestionMap = {
+    erd: [
+      'What entities are missing from my ERD?',
+      'How can I improve the coverage score?',
+      'Explain the relationship issues found.',
+    ],
+    integrity: [
+      'What are the most critical security issues?',
+      'How can I improve authentication?',
+      'Explain the confidentiality findings.',
+    ],
+    compliance: [
+      'Are all required functions implemented?',
+      'What functional gaps were identified?',
+      'How can I improve functional completeness?',
+    ],
+    correctness: [
+      'Are there any off-by-one errors?',
+      'What accuracy issues were found?',
+      'How can I improve computation correctness?',
+    ],
+    usability: [
+      'What accessibility issues were found?',
+      'How can I improve error protection?',
+      'What are the main operability concerns?',
+    ],
+    maintainability: [
+      'How modular is the codebase?',
+      'What are the main testability concerns?',
+      'How can I improve code reusability?',
+    ],
+  };
+  const suggestionQuestions = suggestionMap[analysisType] || suggestionMap.integrity;
 
   return (
     <div style={styles.container}>

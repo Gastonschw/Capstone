@@ -16,8 +16,10 @@ export function getCurrentUserId() {
   return localStorage.getItem(USER_ID_STORAGE_KEY) || null;
 }
 
+const API_BASE = import.meta.env.VITE_API_URL || '/api';
+
 const api = axios.create({
-  baseURL: '/api',
+  baseURL: API_BASE,
   withCredentials: true,
 });
 
@@ -83,8 +85,8 @@ export async function uploadFolder(zipFile, name = null) {
 export function initiateGitHubAuth() {
   const userId = getCurrentUserId();
   const url = userId
-    ? `/api/github/auth?user_id=${encodeURIComponent(userId)}`
-    : '/api/github/auth';
+    ? `${API_BASE}/github/auth?user_id=${encodeURIComponent(userId)}`
+    : `${API_BASE}/github/auth`;
   window.location.href = url;
 }
 
@@ -151,22 +153,129 @@ export async function getIntegrityAnalysis(analysisId) {
   return response.data;
 }
 
+// ============== Compliance Analysis ==============
+
+export async function startComplianceAnalysis(repositoryId, apiKey = '', model = '') {
+  const body = {};
+  if (apiKey) body.api_key = apiKey;
+  if (model) body.model = model;
+  const headers = {};
+  if (apiKey) headers['X-TAMU-API-Key'] = apiKey;
+  const response = await api.post(`/compliance/repository/${repositoryId}/analyze`, body, { headers });
+  return response.data;
+}
+
+export async function listComplianceAnalyses(repositoryId) {
+  const response = await api.get(`/compliance/repository/${repositoryId}/analyses`);
+  return response.data;
+}
+
+export async function getComplianceAnalysis(analysisId) {
+  const response = await api.get(`/compliance/analysis/${analysisId}`);
+  return response.data;
+}
+
+// ============== Correctness Analysis ==============
+
+export async function startCorrectnessAnalysis(repositoryId, apiKey = '', model = '') {
+  const body = {};
+  if (apiKey) body.api_key = apiKey;
+  if (model) body.model = model;
+  const headers = {};
+  if (apiKey) headers['X-TAMU-API-Key'] = apiKey;
+  const response = await api.post(`/correctness/repository/${repositoryId}/analyze`, body, { headers });
+  return response.data;
+}
+
+export async function listCorrectnessAnalyses(repositoryId) {
+  const response = await api.get(`/correctness/repository/${repositoryId}/analyses`);
+  return response.data;
+}
+
+export async function getCorrectnessAnalysis(analysisId) {
+  const response = await api.get(`/correctness/analysis/${analysisId}`);
+  return response.data;
+}
+
+// ============== Usability Analysis ==============
+
+export async function startUsabilityAnalysis(repositoryId, apiKey = '', model = '') {
+  const body = {};
+  if (apiKey) body.api_key = apiKey;
+  if (model) body.model = model;
+  const headers = {};
+  if (apiKey) headers['X-TAMU-API-Key'] = apiKey;
+  const response = await api.post(`/usability/repository/${repositoryId}/analyze`, body, { headers });
+  return response.data;
+}
+
+export async function listUsabilityAnalyses(repositoryId) {
+  const response = await api.get(`/usability/repository/${repositoryId}/analyses`);
+  return response.data;
+}
+
+export async function getUsabilityAnalysis(analysisId) {
+  const response = await api.get(`/usability/analysis/${analysisId}`);
+  return response.data;
+}
+
+// ============== Maintainability Analysis ==============
+
+export async function startMaintainabilityAnalysis(repositoryId, apiKey = '', model = '') {
+  const body = {};
+  if (apiKey) body.api_key = apiKey;
+  if (model) body.model = model;
+  const headers = {};
+  if (apiKey) headers['X-TAMU-API-Key'] = apiKey;
+  const response = await api.post(`/maintainability/repository/${repositoryId}/analyze`, body, { headers });
+  return response.data;
+}
+
+export async function listMaintainabilityAnalyses(repositoryId) {
+  const response = await api.get(`/maintainability/repository/${repositoryId}/analyses`);
+  return response.data;
+}
+
+export async function getMaintainabilityAnalysis(analysisId) {
+  const response = await api.get(`/maintainability/analysis/${analysisId}`);
+  return response.data;
+}
+
 // ============== Polling ==============
 
+const analysisGetters = {
+  erd: getERDAnalysis,
+  integrity: getIntegrityAnalysis,
+  compliance: getComplianceAnalysis,
+  correctness: getCorrectnessAnalysis,
+  usability: getUsabilityAnalysis,
+  maintainability: getMaintainabilityAnalysis,
+};
+
 export async function pollAnalysis(type, analysisId, onUpdate, intervalMs = 2000) {
-  const getAnalysis = type === 'erd' ? getERDAnalysis : getIntegrityAnalysis;
+  const getAnalysis = analysisGetters[type] || getIntegrityAnalysis;
+
+  let errorCount = 0;
+  const maxErrors = 5;
 
   const poll = async () => {
     try {
       const analysis = await getAnalysis(analysisId);
+      errorCount = 0;
       onUpdate(analysis);
 
       if (analysis.status === 'pending' || analysis.status === 'processing') {
         setTimeout(poll, intervalMs);
       }
     } catch (err) {
-      console.error('Poll error:', err);
-      setTimeout(poll, intervalMs * 2);
+      errorCount++;
+      console.error(`Poll error for ${type}/${analysisId} (${errorCount}/${maxErrors}):`, err);
+      if (errorCount < maxErrors) {
+        setTimeout(poll, intervalMs * 2);
+      } else {
+        console.error(`Giving up polling ${type}/${analysisId} after ${maxErrors} errors`);
+        onUpdate({ status: 'failed', error: 'Polling failed' });
+      }
     }
   };
 
@@ -218,7 +327,7 @@ export async function sendChatMessage(
   onDone,
   onError
 ) {
-  const url = `/api/chat/${analysisType}/${analysisId}`;
+  const url = `${API_BASE}/chat/${analysisType}/${analysisId}`;
   const headers = {
     'Content-Type': 'application/json',
   };

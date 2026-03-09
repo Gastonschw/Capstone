@@ -21,6 +21,10 @@ from dotenv import load_dotenv
 from models.repository import Repository, DiscoveredFile, FileType
 from models.erd_analysis import ERDAnalysis
 from models.integrity_analysis import IntegrityAnalysis
+from models.compliance_analysis import ComplianceAnalysis
+from models.correctness_analysis import CorrectnessAnalysis
+from models.usability_analysis import UsabilityAnalysis
+from models.maintainability_analysis import MaintainabilityAnalysis
 
 load_dotenv()
 
@@ -425,6 +429,91 @@ async def stream_erd_chat(
             yield chunk.choices[0].delta.content
 
 
+def _parse_report(report_json):
+    """Parse a JSON report string, returning {} on failure."""
+    if not report_json:
+        return {}
+    try:
+        return json.loads(report_json)
+    except Exception:
+        return {}
+
+
+def _build_code_context(files, repo_path: str, max_files: int = 20) -> str:
+    """Build code files context string from selected files."""
+    code_files_summary = []
+    for f in files[:max_files]:
+        full_path = Path(repo_path) / f.file_path
+        content = read_file_content(str(full_path), max_chars=3000)
+        code_files_summary.append(f"### {f.file_path}\n```\n{content}\n```")
+    return "\n\n".join(code_files_summary)
+
+
+def _build_characteristics_section(reports: list) -> str:
+    """Build characteristics section from list of (name, report_dict) tuples."""
+    sections = []
+    for i, (name, report) in enumerate(reports, 1):
+        sections.append(f"""### {i}. {name} (Score: {report.get('score', 'N/A')})
+Status: {report.get('status', 'N/A')}
+Description: {report.get('description', 'N/A')}
+Findings: {json.dumps(report.get('findings', []), indent=2)}
+Recommendations: {json.dumps(report.get('recommendations', []), indent=2)}""")
+    return "\n\n".join(sections)
+
+
+async def _stream_analysis_chat(
+    model_class,
+    selection_field: str,
+    build_context_fn,
+    analysis_id: int,
+    message: str,
+    history: List[Dict[str, str]],
+    db: AsyncSession,
+    model: Optional[str] = None,
+    api_key: Optional[str] = None
+) -> AsyncGenerator[str, None]:
+    """Generic streaming chat for any analysis type."""
+    result = await db.execute(
+        select(model_class).where(model_class.id == analysis_id)
+    )
+    analysis = result.scalar_one_or_none()
+
+    if not analysis:
+        yield "Error: Analysis not found"
+        return
+
+    result = await db.execute(
+        select(Repository).where(Repository.id == analysis.repository_id)
+    )
+    repository = result.scalar_one_or_none()
+
+    if not repository:
+        yield "Error: Repository not found"
+        return
+
+    system_prompt = await build_context_fn(analysis, repository, db)
+
+    messages = [{"role": "system", "content": system_prompt}]
+    for msg in history:
+        messages.append({"role": msg["role"], "content": msg["content"]})
+    messages.append({"role": "user", "content": message})
+
+    client = get_client(api_key=api_key)
+    resolved_model = model or TAMU_DEFAULT_MODEL
+
+    stream_resp = client.chat.completions.create(
+        model=resolved_model,
+        max_tokens=2048,
+        messages=messages,
+        stream=True,
+        temperature=0,
+    )
+
+    for chunk in stream_resp:
+        if chunk.choices and chunk.choices[0].delta.content:
+            yield chunk.choices[0].delta.content
+
+
 async def stream_integrity_chat(
     analysis_id: int,
     message: str,
@@ -482,7 +571,7 @@ async def stream_integrity_chat(
     client = get_client(api_key=api_key)
     resolved_model = model or TAMU_DEFAULT_MODEL
 
-    stream = client.chat.completions.create(
+    integrity_stream = client.chat.completions.create(
         model=resolved_model,
         max_tokens=2048,
         messages=messages,
@@ -490,6 +579,233 @@ async def stream_integrity_chat(
         temperature=0,
     )
 
-    for chunk in stream:
+    for chunk in integrity_stream:
         if chunk.choices and chunk.choices[0].delta.content:
             yield chunk.choices[0].delta.content
+
+
+async def build_compliance_context(
+    analysis: ComplianceAnalysis, repository: Repository, db: AsyncSession
+) -> str:
+    result = await db.execute(
+        select(DiscoveredFile).where(
+            DiscoveredFile.repository_id == repository.id,
+            DiscoveredFile.is_selected_compliance == True
+        )
+    )
+    files = result.scalars().all()
+    code_context = _build_code_context(files, repository.local_path)
+    summary = _parse_report(analysis.summary_report)
+    reports = [
+        ("Functional Completeness", _parse_report(analysis.functional_completeness_report)),
+        ("Functional Correctness", _parse_report(analysis.functional_correctness_report)),
+        ("Functional Appropriateness", _parse_report(analysis.functional_appropriateness_report)),
+    ]
+    return f"""You are an expert software quality analyst helping the user understand a compliance / functional suitability analysis.
+
+## Analysis Context
+### Repository: {repository.name}
+### Overall Score: {analysis.overall_score}/100
+### Risk Level: {summary.get('risk_level', 'N/A')}
+### Executive Summary:
+{summary.get('executive_summary', 'N/A')}
+### Strengths:
+{json.dumps(summary.get('strengths', []), indent=2)}
+### Areas for Improvement:
+{json.dumps(summary.get('areas_for_improvement', []), indent=2)}
+### Priority Recommendations:
+{json.dumps(summary.get('priority_recommendations', []), indent=2)}
+---
+## Characteristic Reports
+{_build_characteristics_section(reports)}
+---
+## Analyzed Code Files:
+{code_context}
+## Instructions
+- Answer questions about this compliance analysis clearly and helpfully
+- Reference specific findings, scores, and code snippets when relevant
+- Keep responses concise but thorough
+"""
+
+
+async def stream_compliance_chat(
+    analysis_id: int, message: str, history: List[Dict[str, str]],
+    db: AsyncSession, model: Optional[str] = None, api_key: Optional[str] = None
+) -> AsyncGenerator[str, None]:
+    async for chunk in _stream_analysis_chat(
+        ComplianceAnalysis, "is_selected_compliance", build_compliance_context,
+        analysis_id, message, history, db, model, api_key
+    ):
+        yield chunk
+
+
+async def build_correctness_context(
+    analysis: CorrectnessAnalysis, repository: Repository, db: AsyncSession
+) -> str:
+    result = await db.execute(
+        select(DiscoveredFile).where(
+            DiscoveredFile.repository_id == repository.id,
+            DiscoveredFile.is_selected_correctness == True
+        )
+    )
+    files = result.scalars().all()
+    code_context = _build_code_context(files, repository.local_path)
+    summary = _parse_report(analysis.summary_report)
+    reports = [
+        ("Functional Completeness (Correctness)", _parse_report(analysis.functional_completeness_correctness_report)),
+        ("Functional Correctness (Accuracy)", _parse_report(analysis.functional_correctness_accuracy_report)),
+        ("Functional Appropriateness (Correctness)", _parse_report(analysis.functional_appropriateness_correctness_report)),
+    ]
+    return f"""You are an expert software quality analyst helping the user understand a correctness analysis.
+
+## Analysis Context
+### Repository: {repository.name}
+### Overall Score: {analysis.overall_score}/100
+### Risk Level: {summary.get('risk_level', 'N/A')}
+### Executive Summary:
+{summary.get('executive_summary', 'N/A')}
+### Strengths:
+{json.dumps(summary.get('strengths', []), indent=2)}
+### Areas for Improvement:
+{json.dumps(summary.get('areas_for_improvement', []), indent=2)}
+### Priority Recommendations:
+{json.dumps(summary.get('priority_recommendations', []), indent=2)}
+---
+## Characteristic Reports
+{_build_characteristics_section(reports)}
+---
+## Analyzed Code Files:
+{code_context}
+## Instructions
+- Answer questions about this correctness analysis clearly and helpfully
+- Reference specific findings, scores, and code snippets when relevant
+- Keep responses concise but thorough
+"""
+
+
+async def stream_correctness_chat(
+    analysis_id: int, message: str, history: List[Dict[str, str]],
+    db: AsyncSession, model: Optional[str] = None, api_key: Optional[str] = None
+) -> AsyncGenerator[str, None]:
+    async for chunk in _stream_analysis_chat(
+        CorrectnessAnalysis, "is_selected_correctness", build_correctness_context,
+        analysis_id, message, history, db, model, api_key
+    ):
+        yield chunk
+
+
+async def build_usability_context(
+    analysis: UsabilityAnalysis, repository: Repository, db: AsyncSession
+) -> str:
+    result = await db.execute(
+        select(DiscoveredFile).where(
+            DiscoveredFile.repository_id == repository.id,
+            DiscoveredFile.is_selected_usability == True
+        )
+    )
+    files = result.scalars().all()
+    code_context = _build_code_context(files, repository.local_path)
+    summary = _parse_report(analysis.summary_report)
+    reports = [
+        ("Appropriateness Recognizability", _parse_report(analysis.appropriateness_recognizability_report)),
+        ("Learnability", _parse_report(analysis.learnability_report)),
+        ("Operability", _parse_report(analysis.operability_report)),
+        ("User Error Protection", _parse_report(analysis.user_error_protection_report)),
+        ("User Engagement", _parse_report(analysis.user_engagement_report)),
+        ("Self-Descriptiveness", _parse_report(analysis.self_descriptiveness_report)),
+        ("Inclusivity", _parse_report(analysis.inclusivity_report)),
+        ("User Assistance", _parse_report(analysis.user_assistance_report)),
+    ]
+    return f"""You are an expert UX/usability analyst helping the user understand a usability analysis.
+
+## Analysis Context
+### Repository: {repository.name}
+### Overall Score: {analysis.overall_score}/100
+### Risk Level: {summary.get('risk_level', 'N/A')}
+### Executive Summary:
+{summary.get('executive_summary', 'N/A')}
+### Strengths:
+{json.dumps(summary.get('strengths', []), indent=2)}
+### Areas for Improvement:
+{json.dumps(summary.get('areas_for_improvement', []), indent=2)}
+### Priority Recommendations:
+{json.dumps(summary.get('priority_recommendations', []), indent=2)}
+---
+## Characteristic Reports
+{_build_characteristics_section(reports)}
+---
+## Analyzed Code Files:
+{code_context}
+## Instructions
+- Answer questions about this usability analysis clearly and helpfully
+- Reference specific findings, scores, and code snippets when relevant
+- Keep responses concise but thorough
+"""
+
+
+async def stream_usability_chat(
+    analysis_id: int, message: str, history: List[Dict[str, str]],
+    db: AsyncSession, model: Optional[str] = None, api_key: Optional[str] = None
+) -> AsyncGenerator[str, None]:
+    async for chunk in _stream_analysis_chat(
+        UsabilityAnalysis, "is_selected_usability", build_usability_context,
+        analysis_id, message, history, db, model, api_key
+    ):
+        yield chunk
+
+
+async def build_maintainability_context(
+    analysis: MaintainabilityAnalysis, repository: Repository, db: AsyncSession
+) -> str:
+    result = await db.execute(
+        select(DiscoveredFile).where(
+            DiscoveredFile.repository_id == repository.id,
+            DiscoveredFile.is_selected_maintainability == True
+        )
+    )
+    files = result.scalars().all()
+    code_context = _build_code_context(files, repository.local_path)
+    summary = _parse_report(analysis.summary_report)
+    reports = [
+        ("Modularity", _parse_report(analysis.modularity_report)),
+        ("Reusability", _parse_report(analysis.reusability_report)),
+        ("Analysability", _parse_report(analysis.analysability_report)),
+        ("Modifiability", _parse_report(analysis.modifiability_report)),
+        ("Testability", _parse_report(analysis.testability_report)),
+    ]
+    return f"""You are an expert software architect helping the user understand a maintainability analysis.
+
+## Analysis Context
+### Repository: {repository.name}
+### Overall Score: {analysis.overall_score}/100
+### Risk Level: {summary.get('risk_level', 'N/A')}
+### Executive Summary:
+{summary.get('executive_summary', 'N/A')}
+### Strengths:
+{json.dumps(summary.get('strengths', []), indent=2)}
+### Areas for Improvement:
+{json.dumps(summary.get('areas_for_improvement', []), indent=2)}
+### Priority Recommendations:
+{json.dumps(summary.get('priority_recommendations', []), indent=2)}
+---
+## Characteristic Reports
+{_build_characteristics_section(reports)}
+---
+## Analyzed Code Files:
+{code_context}
+## Instructions
+- Answer questions about this maintainability analysis clearly and helpfully
+- Reference specific findings, scores, and code snippets when relevant
+- Keep responses concise but thorough
+"""
+
+
+async def stream_maintainability_chat(
+    analysis_id: int, message: str, history: List[Dict[str, str]],
+    db: AsyncSession, model: Optional[str] = None, api_key: Optional[str] = None
+) -> AsyncGenerator[str, None]:
+    async for chunk in _stream_analysis_chat(
+        MaintainabilityAnalysis, "is_selected_maintainability", build_maintainability_context,
+        analysis_id, message, history, db, model, api_key
+    ):
+        yield chunk

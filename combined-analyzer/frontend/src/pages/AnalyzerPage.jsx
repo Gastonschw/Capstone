@@ -5,7 +5,10 @@ import UploadForm from '../components/upload/UploadForm';
 import RepositoryBrowser from '../components/repository/RepositoryBrowser';
 import ERDReportView from '../components/erd/ERDReportView';
 import IntegrityReportView from '../components/integrity/IntegrityReportView';
-import ClassesPanel from '../components/classes/ClassesPanel';
+import ComplianceReportView from '../components/compliance/ComplianceReportView';
+import CorrectnessReportView from '../components/correctness/CorrectnessReportView';
+import UsabilityReportView from '../components/usability/UsabilityReportView';
+import MaintainabilityReportView from '../components/maintainability/MaintainabilityReportView';
 import { listRepositories, listChatModels, setCurrentUserId } from '../api';
 import { supabase, isSupabaseConfigured } from '../lib/supabaseClient';
 
@@ -78,7 +81,7 @@ export default function AnalyzerPage() {
   const [repositories, setRepositories] = useState([]);
   const [selectedRepo, setSelectedRepo] = useState(null);
   const [view, setView] = useState('upload');
-  const [currentAnalysis, setCurrentAnalysis] = useState(null);
+  const [analysisMap, setAnalysisMap] = useState({});
   const [analysisType, setAnalysisType] = useState(null);
   const [activeReportTab, setActiveReportTab] = useState('erd');
   const [chatApiKey, setChatApiKey] = useState(() => readFromStorage(CHAT_API_KEY_STORAGE));
@@ -200,15 +203,15 @@ export default function AnalyzerPage() {
   };
 
   const handleAnalysisComplete = (analysis, type) => {
-    setCurrentAnalysis(analysis);
+    setAnalysisMap(prev => ({ ...prev, [type]: analysis }));
     setAnalysisType(type);
     setActiveReportTab(type);
-    setView(type === 'erd' ? 'erd-report' : 'integrity-report');
+    setView(`${type}-report`);
   };
 
   const handleBackToRepository = () => {
     setView('browser');
-    setCurrentAnalysis(null);
+    setAnalysisMap({});
   };
 
   const handleBackToUpload = () => {
@@ -249,62 +252,58 @@ export default function AnalyzerPage() {
         ) : null;
 
       case 'erd-report':
-        return currentAnalysis ? (
-          <div>
-            <div style={styles.tabContainer}>
-              <button
-                style={{ ...styles.tab, ...(activeReportTab === 'erd' ? styles.tabActive : styles.tabInactive) }}
-                onClick={() => setActiveReportTab('erd')}
-              >
-                ERD Analysis
-              </button>
-              <button
-                style={{ ...styles.tab, ...(activeReportTab === 'integrity' ? styles.tabActive : styles.tabInactive) }}
-                onClick={() => {
-                  setActiveReportTab('integrity');
-                  setView('integrity-report');
-                }}
-              >
-                Integrity Analysis
-              </button>
-            </div>
-            <ERDReportView
-              analysisId={currentAnalysis.id}
-              onBack={handleBackToRepository}
-              chatModel={chatModel}
-              chatApiKey={chatApiKey}
-            />
-          </div>
-        ) : null;
-
       case 'integrity-report':
-        return currentAnalysis ? (
+      case 'compliance-report':
+      case 'correctness-report':
+      case 'usability-report':
+      case 'maintainability-report': {
+        if (Object.keys(analysisMap).length === 0) return null;
+        const ReportComponents = {
+          erd: ERDReportView,
+          integrity: IntegrityReportView,
+          compliance: ComplianceReportView,
+          correctness: CorrectnessReportView,
+          usability: UsabilityReportView,
+          maintainability: MaintainabilityReportView,
+        };
+        // Only show tabs for types that have results
+        const availableTabs = Object.keys(analysisMap).map((key) => ({
+          key,
+          label: key.charAt(0).toUpperCase() + key.slice(1),
+        }));
+        const activeAnalysis = analysisMap[activeReportTab];
+        const ActiveReport = ReportComponents[activeReportTab] || IntegrityReportView;
+        return (
           <div>
             <div style={styles.tabContainer}>
-              <button
-                style={{ ...styles.tab, ...(activeReportTab === 'erd' ? styles.tabActive : styles.tabInactive) }}
-                onClick={() => {
-                  setActiveReportTab('erd');
-                  setView('erd-report');
-                }}
-              >
-                ERD Analysis
-              </button>
-              <button
-                style={{ ...styles.tab, ...(activeReportTab === 'integrity' ? styles.tabActive : styles.tabInactive) }}
-                onClick={() => setActiveReportTab('integrity')}
-              >
-                Integrity Analysis
-              </button>
+              {availableTabs.map((t) => (
+                <button
+                  key={t.key}
+                  style={{ ...styles.tab, ...(activeReportTab === t.key ? styles.tabActive : styles.tabInactive) }}
+                  onClick={() => {
+                    setActiveReportTab(t.key);
+                    setView(`${t.key}-report`);
+                  }}
+                >
+                  {t.label}
+                </button>
+              ))}
             </div>
-            <IntegrityReportView
-              analysisId={currentAnalysis.id}
-              onBack={handleBackToRepository}
-              chatModel={chatModel}
-              chatApiKey={chatApiKey}
-            />
+            {activeAnalysis ? (
+              <ActiveReport
+                analysisId={activeAnalysis.id}
+                onBack={handleBackToRepository}
+                chatModel={chatModel}
+                chatApiKey={chatApiKey}
+              />
+            ) : (
+              <div style={{ textAlign: 'center', padding: '40px', color: '#666' }}>
+                <p>No {activeReportTab} analysis results available.</p>
+              </div>
+            )}
           </div>
-        ) : null;
+        );
+      }
 
       default:
         return null;

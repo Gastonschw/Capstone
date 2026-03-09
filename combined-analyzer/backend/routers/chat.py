@@ -14,6 +14,10 @@ from database import get_db
 from services.chat_service import (
     stream_erd_chat,
     stream_integrity_chat,
+    stream_compliance_chat,
+    stream_correctness_chat,
+    stream_usability_chat,
+    stream_maintainability_chat,
     fetch_tamu_models,
     TAMU_DEFAULT_MODEL,
 )
@@ -131,6 +135,90 @@ async def chat_about_integrity_analysis(
             "Connection": "keep-alive",
             "X-Accel-Buffering": "no",
         }
+    )
+
+
+@router.post("/compliance/{analysis_id}")
+async def chat_about_compliance_analysis(
+    analysis_id: int,
+    request: ChatRequest,
+    tamu_api_key: Optional[str] = Header(default=None, alias="X-TAMU-API-Key"),
+    db: AsyncSession = Depends(get_db)
+):
+    """Chat about a Compliance analysis."""
+    history = [{"role": m.role, "content": m.content} for m in request.history]
+    api_key = request.api_key if (request.api_key and request.api_key.strip()) else tamu_api_key
+
+    return StreamingResponse(
+        event_generator(
+            stream_compliance_chat, analysis_id, request.message, history, db,
+            model=request.model, api_key=api_key,
+        ),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"}
+    )
+
+
+@router.post("/correctness/{analysis_id}")
+async def chat_about_correctness_analysis(
+    analysis_id: int,
+    request: ChatRequest,
+    tamu_api_key: Optional[str] = Header(default=None, alias="X-TAMU-API-Key"),
+    db: AsyncSession = Depends(get_db)
+):
+    """Chat about a Correctness analysis."""
+    history = [{"role": m.role, "content": m.content} for m in request.history]
+    api_key = request.api_key if (request.api_key and request.api_key.strip()) else tamu_api_key
+
+    return StreamingResponse(
+        event_generator(
+            stream_correctness_chat, analysis_id, request.message, history, db,
+            model=request.model, api_key=api_key,
+        ),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"}
+    )
+
+
+@router.post("/usability/{analysis_id}")
+async def chat_about_usability_analysis(
+    analysis_id: int,
+    request: ChatRequest,
+    tamu_api_key: Optional[str] = Header(default=None, alias="X-TAMU-API-Key"),
+    db: AsyncSession = Depends(get_db)
+):
+    """Chat about a Usability analysis."""
+    history = [{"role": m.role, "content": m.content} for m in request.history]
+    api_key = request.api_key if (request.api_key and request.api_key.strip()) else tamu_api_key
+
+    return StreamingResponse(
+        event_generator(
+            stream_usability_chat, analysis_id, request.message, history, db,
+            model=request.model, api_key=api_key,
+        ),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"}
+    )
+
+
+@router.post("/maintainability/{analysis_id}")
+async def chat_about_maintainability_analysis(
+    analysis_id: int,
+    request: ChatRequest,
+    tamu_api_key: Optional[str] = Header(default=None, alias="X-TAMU-API-Key"),
+    db: AsyncSession = Depends(get_db)
+):
+    """Chat about a Maintainability analysis."""
+    history = [{"role": m.role, "content": m.content} for m in request.history]
+    api_key = request.api_key if (request.api_key and request.api_key.strip()) else tamu_api_key
+
+    return StreamingResponse(
+        event_generator(
+            stream_maintainability_chat, analysis_id, request.message, history, db,
+            model=request.model, api_key=api_key,
+        ),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"}
     )
 
 
