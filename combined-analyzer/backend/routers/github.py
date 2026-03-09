@@ -40,7 +40,8 @@ def get_session_id(request: Request, response: Response) -> str:
             value=session_id,
             httponly=True,
             max_age=86400 * 30,  # 30 days
-            samesite="lax"
+            samesite="none",
+            secure=True,
         )
     return session_id
 
