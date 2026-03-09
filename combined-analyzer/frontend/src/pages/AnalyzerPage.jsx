@@ -9,6 +9,7 @@ import ComplianceReportView from '../components/compliance/ComplianceReportView'
 import CorrectnessReportView from '../components/correctness/CorrectnessReportView';
 import UsabilityReportView from '../components/usability/UsabilityReportView';
 import MaintainabilityReportView from '../components/maintainability/MaintainabilityReportView';
+import ClassesPanel from '../components/classes/ClassesPanel';
 import { listRepositories, listChatModels, setCurrentUserId } from '../api';
 import { supabase, isSupabaseConfigured } from '../lib/supabaseClient';
 
