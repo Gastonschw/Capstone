@@ -262,7 +262,7 @@ export default function IntegrityReportView({ analysisId, onBack, chatModel, cha
 
       {showApiHint && (
         <div style={styles.apiHint}>
-          <strong>API response incomplete.</strong> Ensure the TAMU API key is set (in the analyzer page) or in the backend <code>TAMU_API_KEY</code>, and that the base URL/model match your institution. See{' '}
+          <strong>API response incomplete.</strong> Ensure sufficient api tokens are available and the TAMU API key is set (in the analyzer page) or in the backend <code>TAMU_API_KEY</code>, and that the base URL/model match your institution. See{' '}
           <a href="https://docs.tamus.ai/docs/prod/advanced/api/api-docs" target="_blank" rel="noopener noreferrer">TAMUS AI API docs</a> for details.
         </div>
       )}
