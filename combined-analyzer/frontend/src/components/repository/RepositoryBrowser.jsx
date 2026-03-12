@@ -339,6 +339,14 @@ export default function RepositoryBrowser({ repositoryId, onBack, onAnalysisComp
   const [latestLoading, setLatestLoading] = useState(false);
   const [latestError, setLatestError] = useState('');
   const [showNewRun, setShowNewRun] = useState(false);
+  const [runningTypes, setRunningTypes] = useState({
+    erd: false,
+    integrity: false,
+    compliance: false,
+    correctness: false,
+    usability: false,
+    maintainability: false,
+  });
   const [analysisTypes, setAnalysisTypes] = useState({
     erd: false, integrity: false, compliance: false, correctness: false,
     usability: false, maintainability: false,
@@ -587,17 +595,18 @@ export default function RepositoryBrowser({ repositoryId, onBack, onAnalysisComp
         const analysis = await starters[type]();
         console.log(`Started ${type} analysis with id=${analysis.id}`);
         startedAnalyses.push({ type, id: analysis.id });
+        setRunningTypes((prev) => ({ ...prev, [type]: true }));
       }
 
-      // Poll each analysis independently
+      // Poll each analysis independently (update status but do not auto-navigate)
       for (const { type, id } of startedAnalyses) {
         pollAnalysis(type, id, (updatedAnalysis) => {
           if (updatedAnalysis.status === 'completed' || updatedAnalysis.status === 'failed') {
             completedCount++;
-            onAnalysisComplete(updatedAnalysis, type);
+            setRunningTypes((prev) => ({ ...prev, [type]: false }));
+            loadLatestRuns();
             if (completedCount >= total) {
               setAnalyzing(false);
-              loadLatestRuns();
             }
           }
         });
@@ -713,6 +722,9 @@ export default function RepositoryBrowser({ repositoryId, onBack, onAnalysisComp
       <div style={styles.latestSection}>
         <div style={styles.latestHeaderRow}>
           <h3 style={styles.latestTitle}>📌 Latest results</h3>
+          <span style={{ fontSize: '12px', color: '#666', flex: '1 1 100%' }}>
+            Each card shows the most recent run for that tool. Use New run / Run again to configure and start analyses.
+          </span>
           <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
             <button
               style={{ ...styles.expanderButton, ...(showNewRun ? {} : styles.expanderButtonPrimary) }}
@@ -729,30 +741,51 @@ export default function RepositoryBrowser({ repositoryId, onBack, onAnalysisComp
         <div style={styles.latestGrid}>
           {latestCards.map((c) => {
             const run = latestRuns[c.type];
-        const hasRun = Boolean(run && run.id);
             const status = run?.status;
-        const isCompleted = status === 'completed';
+            const isCompleted = status === 'completed';
+            const isRunning = runningTypes[c.type];
+            const hasRun = Boolean(run && run.id);
             const score = getLatestScore(c.type, run);
+
+            let badgeStyle;
+            let badgeLabel;
+            if (isRunning) {
+              badgeStyle = { ...styles.latestBadge, ...styles.badgeProcessing };
+              badgeLabel = 'Running…';
+            } else {
+              badgeStyle = getStatusBadgeStyle(status, hasRun);
+              badgeLabel = getStatusLabel(status, hasRun);
+            }
+
+            const showScore = !isRunning && score != null;
+
             return (
               <div key={c.type} style={styles.latestCard}>
-                <div style={styles.latestCardTop}>
-                  <h4 style={styles.latestCardTitle}>
-                    <span>{c.icon}</span>
-                    <span>{c.label}</span>
-                  </h4>
-                  <span style={getStatusBadgeStyle(status, hasRun)}>
-                    {getStatusLabel(status, isCompleted)}
-                  </span>
-                </div>
-
-                <div style={styles.latestMetricsRow}>
-                  <div>
-                    <div style={styles.latestScore}>{score == null ? '—' : Math.round(score)}</div>
-                    <div style={styles.latestScoreLabel}>{c.scoreLabel} score</div>
+                <div
+                  onClick={() => {
+                    if (!isRunning && isCompleted && run?.id) {
+                      handleViewLatest(c.type);
+                    }
+                  }}
+                  style={{ cursor: !isRunning && isCompleted && run?.id ? 'pointer' : 'default' }}
+                >
+                  <div style={styles.latestCardTop}>
+                    <h4 style={styles.latestCardTitle}>
+                      <span>{c.icon}</span>
+                      <span>{c.label}</span>
+                    </h4>
+                    <span style={badgeStyle}>{badgeLabel}</span>
                   </div>
-                  <div style={styles.latestMeta}>
-                    <div>Created: {formatDateTime(run?.created_at)}</div>
-                    <div>Completed: {formatDateTime(run?.completed_at)}</div>
+
+                  <div style={styles.latestMetricsRow}>
+                    <div>
+                      <div style={styles.latestScore}>{showScore ? Math.round(score) : '—'}</div>
+                      <div style={styles.latestScoreLabel}>{c.scoreLabel} score</div>
+                    </div>
+                    <div style={styles.latestMeta}>
+                      <div>Created: {formatDateTime(run?.created_at)}</div>
+                      <div>Completed: {formatDateTime(run?.completed_at)}</div>
+                    </div>
                   </div>
                 </div>
 
@@ -763,7 +796,7 @@ export default function RepositoryBrowser({ repositoryId, onBack, onAnalysisComp
                   >
                     {isCompleted ? 'Run again' : 'Run'}
                   </button>
-                  {isCompleted && (
+                  {isCompleted && !isRunning && (
                     <button
                       style={styles.smallButton}
                       onClick={() => handleViewLatest(c.type)}
