@@ -54,6 +54,10 @@ async def list_repositories(
     result = await db.execute(q)
     repositories = result.scalars().all()
 
+    def completed_count(analyses):
+        """Count only analyses with status 'completed' so sidebar badges match Latest results."""
+        return sum(1 for a in (analyses or []) if getattr(a, "status", None) == "completed")
+
     return [
         RepositoryListResponse(
             id=repo.id,
@@ -62,12 +66,12 @@ async def list_repositories(
             github_url=repo.github_url,
             created_at=repo.created_at,
             file_count=len(repo.discovered_files),
-            erd_analysis_count=len(repo.erd_analyses),
-            integrity_analysis_count=len(repo.integrity_analyses),
-            compliance_analysis_count=len(repo.compliance_analyses),
-            correctness_analysis_count=len(repo.correctness_analyses),
-            usability_analysis_count=len(repo.usability_analyses),
-            maintainability_analysis_count=len(repo.maintainability_analyses),
+            erd_analysis_count=completed_count(repo.erd_analyses),
+            integrity_analysis_count=completed_count(repo.integrity_analyses),
+            compliance_analysis_count=completed_count(repo.compliance_analyses),
+            correctness_analysis_count=completed_count(repo.correctness_analyses),
+            usability_analysis_count=completed_count(repo.usability_analyses),
+            maintainability_analysis_count=completed_count(repo.maintainability_analyses),
         )
         for repo in repositories
     ]

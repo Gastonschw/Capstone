@@ -390,13 +390,18 @@ export default function RepositoryBrowser({ repositoryId, onBack, onAnalysisComp
         listMaintainabilityAnalyses(repositoryId).catch(() => []),
       ]);
 
+      const pickLatestCompleted = (list) => {
+        if (!Array.isArray(list)) return null;
+        return list.find((item) => item && item.status === 'completed') || null;
+      };
+
       const next = {
-        erd: Array.isArray(erdList) ? (erdList[0] || null) : null,
-        integrity: Array.isArray(integrityList) ? (integrityList[0] || null) : null,
-        compliance: Array.isArray(complianceList) ? (complianceList[0] || null) : null,
-        correctness: Array.isArray(correctnessList) ? (correctnessList[0] || null) : null,
-        usability: Array.isArray(usabilityList) ? (usabilityList[0] || null) : null,
-        maintainability: Array.isArray(maintainabilityList) ? (maintainabilityList[0] || null) : null,
+        erd: pickLatestCompleted(erdList),
+        integrity: pickLatestCompleted(integrityList),
+        compliance: pickLatestCompleted(complianceList),
+        correctness: pickLatestCompleted(correctnessList),
+        usability: pickLatestCompleted(usabilityList),
+        maintainability: pickLatestCompleted(maintainabilityList),
       };
       setLatestRuns(next);
     } catch (e) {
