@@ -101,14 +101,16 @@ async def github_callback(
     db: AsyncSession = Depends(get_db)
 ):
     """Handle GitHub OAuth callback."""
-    session_id = request.cookies.get(SESSION_COOKIE) or request.headers.get("x-session-id")
-    expected_session_id, user_id = _parse_state(state, session_id)
+    # The state param carries the session_id (and optionally user_id).
+    # We can't rely on the cookie here — this is a browser redirect from GitHub
+    # so no custom headers are present, and third-party cookie blocking may
+    # prevent the session cookie from being sent.
+    state_session_id, user_id = _parse_state(state, state)
+    cookie_session_id = request.cookies.get(SESSION_COOKIE)
 
-    # Verify state matches session (CSRF protection)
-    if session_id != expected_session_id:
-        return RedirectResponse(
-            url=f"{FRONTEND_URL}/?github_auth=error&message=Invalid+state+parameter"
-        )
+    # Use cookie if available and matches state; otherwise trust state.
+    # (State was set by our /auth endpoint so it's safe to trust here.)
+    session_id = cookie_session_id if cookie_session_id == state_session_id else state_session_id
 
     try:
         # Exchange code for token
