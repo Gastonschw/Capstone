@@ -243,7 +243,7 @@ def scan_repository_files(repo_path: str) -> Dict[str, List[Dict]]:
             if suffix in TEXT_EXTENSIONS or suffix in CODE_EXTENSIONS or suffix in CONFIG_EXTENSIONS:
                 try:
                     with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-                        content = f.read(5000)  # Read first 5KB
+                        content = f.read(5000).replace('\x00', '')  # Read first 5KB, strip null bytes
                 except Exception:
                     continue
 

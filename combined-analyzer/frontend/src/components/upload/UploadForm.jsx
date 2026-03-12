@@ -6,6 +6,7 @@ import {
   importGitHubRepo,
   initiateGitHubAuth,
   logoutGitHub,
+  setSessionId,
 } from '../../api';
 
 const styles = {
@@ -212,6 +213,11 @@ export default function UploadForm({ onRepositoryCreated, tamuApiKey = '' }) {
     checkGitHubAuth();
 
     const params = new URLSearchParams(window.location.search);
+    // Store session_id from OAuth callback for cross-origin cookie fallback
+    const sid = params.get('session_id');
+    if (sid) {
+      setSessionId(sid);
+    }
     if (params.get('github_auth') === 'success') {
       setSuccess('Successfully connected to GitHub!');
       checkGitHubAuth();
@@ -285,7 +291,7 @@ export default function UploadForm({ onRepositoryCreated, tamuApiKey = '' }) {
     setError(null);
 
     try {
-      const repository = await uploadFolder(zipFile);
+      const repository = await uploadFolder(zipFile, null, tamuApiKey);
       setSuccess(`Repository "${repository.name}" uploaded successfully!`);
       setZipFile(null);
       onRepositoryCreated(repository);

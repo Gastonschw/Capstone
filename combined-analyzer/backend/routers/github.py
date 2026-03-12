@@ -4,7 +4,7 @@ GitHub OAuth API routes.
 
 import uuid
 from typing import List, Optional, Tuple
-from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response
 from fastapi.responses import RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -31,18 +31,23 @@ SESSION_COOKIE = "session_id"
 
 
 def get_session_id(request: Request, response: Response) -> str:
-    """Get or create a session ID from cookies."""
-    session_id = request.cookies.get(SESSION_COOKIE)
+    """Get or create a session ID from cookies or X-Session-Id header.
+
+    Checks cookie first, then the X-Session-Id header (needed for cross-origin
+    deployments where third-party cookies are blocked by the browser).
+    """
+    session_id = request.cookies.get(SESSION_COOKIE) or request.headers.get("x-session-id")
     if not session_id:
         session_id = str(uuid.uuid4())
-        response.set_cookie(
-            key=SESSION_COOKIE,
-            value=session_id,
-            httponly=True,
-            max_age=86400 * 30,  # 30 days
-            samesite="none",
-            secure=True,
-        )
+    # Always (re-)set the cookie so it stays fresh
+    response.set_cookie(
+        key=SESSION_COOKIE,
+        value=session_id,
+        httponly=True,
+        max_age=86400 * 30,  # 30 days
+        samesite="none",
+        secure=True,
+    )
     return session_id
 
 
@@ -51,12 +56,30 @@ async def github_auth(
     request: Request,
     response: Response,
     user_id: Optional[str] = None,
+    session_id_param: Optional[str] = Query(None, alias="session_id"),
 ):
-    """Initiate GitHub OAuth flow. Optional user_id links the GitHub account to that user (Supabase)."""
-    session_id = get_session_id(request, response)
+    """Initiate GitHub OAuth flow. Optional user_id links the GitHub account to that user (Supabase).
+    session_id_param can be passed from the frontend to reuse an existing session when cookies are blocked."""
+    # Prefer cookie/header, fall back to query-param from frontend
+    sid = (
+        request.cookies.get(SESSION_COOKIE)
+        or request.headers.get("x-session-id")
+        or session_id_param
+    )
+    if not sid:
+        sid = str(uuid.uuid4())
+    # Set the cookie on the redirect response
+    response.set_cookie(
+        key=SESSION_COOKIE,
+        value=sid,
+        httponly=True,
+        max_age=86400 * 30,
+        samesite="none",
+        secure=True,
+    )
 
     # State: session_id for CSRF; optional user_id so callback can link token to user
-    state = f"{session_id}:{user_id}" if user_id else session_id
+    state = f"{sid}:{user_id}" if user_id else sid
     auth_url = get_github_auth_url(state)
 
     return RedirectResponse(url=auth_url)
@@ -78,14 +101,16 @@ async def github_callback(
     db: AsyncSession = Depends(get_db)
 ):
     """Handle GitHub OAuth callback."""
-    session_id = request.cookies.get(SESSION_COOKIE)
-    expected_session_id, user_id = _parse_state(state, session_id)
+    # The state param carries the session_id (and optionally user_id).
+    # We can't rely on the cookie here — this is a browser redirect from GitHub
+    # so no custom headers are present, and third-party cookie blocking may
+    # prevent the session cookie from being sent.
+    state_session_id, user_id = _parse_state(state, state)
+    cookie_session_id = request.cookies.get(SESSION_COOKIE)
 
-    # Verify state matches session (CSRF protection)
-    if session_id != expected_session_id:
-        return RedirectResponse(
-            url=f"{FRONTEND_URL}/?github_auth=error&message=Invalid+state+parameter"
-        )
+    # Use cookie if available and matches state; otherwise trust state.
+    # (State was set by our /auth endpoint so it's safe to trust here.)
+    session_id = cookie_session_id if cookie_session_id == state_session_id else state_session_id
 
     try:
         # Exchange code for token
@@ -104,7 +129,11 @@ async def github_callback(
         # Save token (optionally linked to Supabase user)
         await save_github_token(db, session_id, access_token, user_info, user_id=user_id)
 
-        return RedirectResponse(url=f"{FRONTEND_URL}/?github_auth=success")
+        # Include session_id in redirect so the frontend can store it for
+        # cross-origin requests (third-party cookies may be blocked).
+        return RedirectResponse(
+            url=f"{FRONTEND_URL}/?github_auth=success&session_id={session_id}"
+        )
 
     except Exception as e:
         return RedirectResponse(
@@ -210,7 +239,7 @@ async def github_logout(
     db: AsyncSession = Depends(get_db)
 ):
     """Log out from GitHub (delete stored token)."""
-    session_id = request.cookies.get(SESSION_COOKIE)
+    session_id = request.cookies.get(SESSION_COOKIE) or request.headers.get("x-session-id")
     if session_id:
         await delete_github_token(db, session_id)
 

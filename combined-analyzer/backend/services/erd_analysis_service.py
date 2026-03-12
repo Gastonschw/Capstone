@@ -4,24 +4,153 @@ ERD Analysis Service
 Multi-agent workflow for repository analysis:
 1. ERD to UML Agent - converts ERD diagrams to structured UML
 2. Analysis Agent - analyzes UML against user stories
+
+Uses TAMU API (OpenAI-compatible) so the same API key as chat works.
 """
 
+import asyncio
 import base64
 import json
+import logging
 from pathlib import Path
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Any, Tuple, Optional
 from dataclasses import dataclass
 
-import anthropic
+logger = logging.getLogger(__name__)
+
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 from models.repository import Repository, DiscoveredFile, FileType
 from models.erd_analysis import ERDAnalysis
+from services.chat_service import get_client, TAMU_DEFAULT_MODEL
 
 
-def get_client():
-    return anthropic.Anthropic()
+def _collect_stream(stream) -> str:
+    """Collect streamed chunks into a single string, handling both SSE strings and OpenAI objects."""
+    if isinstance(stream, str):
+        # TAMU API sometimes returns raw SSE text — parse each data: line as JSON
+        parts = []
+        for line in stream.split("\n"):
+            line = line.strip()
+            if not line.startswith("data: "):
+                continue
+            payload = line[6:]
+            if payload == "[DONE]":
+                break
+            try:
+                chunk = json.loads(payload)
+                choices = chunk.get("choices", [])
+                if choices:
+                    content = choices[0].get("delta", {}).get("content", "")
+                    if content:
+                        parts.append(content)
+            except json.JSONDecodeError:
+                continue
+        return "".join(parts)
+
+    # Standard OpenAI streaming response (iterable of chunks)
+    parts = []
+    for chunk in stream:
+        if hasattr(chunk, 'choices') and chunk.choices:
+            delta = chunk.choices[0].delta
+            if hasattr(delta, 'content') and delta.content:
+                parts.append(delta.content)
+    return "".join(parts)
+
+
+def _repair_truncated_json(text: str) -> Optional[str]:
+    """Attempt to repair JSON truncated by token limits by closing open brackets."""
+    if not text:
+        return None
+    # Strip any trailing incomplete string value
+    # Find last complete key-value or array element
+    # Then close all open brackets/braces
+    stack = []
+    in_string = False
+    escape = False
+    last_valid = 0
+    for i, ch in enumerate(text):
+        if escape:
+            escape = False
+            continue
+        if ch == '\\' and in_string:
+            escape = True
+            continue
+        if ch == '"' and not escape:
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if ch in ('{', '['):
+            stack.append(ch)
+            last_valid = i
+        elif ch == '}':
+            if stack and stack[-1] == '{':
+                stack.pop()
+                last_valid = i
+        elif ch == ']':
+            if stack and stack[-1] == '[':
+                stack.pop()
+                last_valid = i
+
+    if not stack:
+        return None  # Already balanced or unfixable
+
+    # Truncate to last complete value boundary
+    # Find the last comma, closing bracket, or colon+value before end
+    truncated = text.rstrip()
+    # Remove any trailing incomplete string/value
+    while truncated and truncated[-1] not in ('}', ']', '"', ',', 'e', 'l', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9'):
+        truncated = truncated[:-1]
+    # Remove trailing comma
+    if truncated.endswith(','):
+        truncated = truncated[:-1]
+    # If we're in the middle of a string value, close it
+    # Count unescaped quotes
+    quote_count = 0
+    esc = False
+    for ch in truncated:
+        if esc:
+            esc = False
+            continue
+        if ch == '\\':
+            esc = True
+            continue
+        if ch == '"':
+            quote_count += 1
+    if quote_count % 2 != 0:
+        truncated += '"'
+
+    # Close remaining open brackets
+    # Re-scan to get current stack state
+    stack2 = []
+    in_string2 = False
+    escape2 = False
+    for ch in truncated:
+        if escape2:
+            escape2 = False
+            continue
+        if ch == '\\' and in_string2:
+            escape2 = True
+            continue
+        if ch == '"' and not escape2:
+            in_string2 = not in_string2
+            continue
+        if in_string2:
+            continue
+        if ch in ('{', '['):
+            stack2.append(ch)
+        elif ch == '}' and stack2 and stack2[-1] == '{':
+            stack2.pop()
+        elif ch == ']' and stack2 and stack2[-1] == '[':
+            stack2.pop()
+
+    closers = {'[': ']', '{': '}'}
+    for bracket in reversed(stack2):
+        truncated += closers.get(bracket, '')
+
+    return truncated
 
 
 @dataclass
@@ -57,16 +186,13 @@ def encode_image(image_path: str) -> Tuple[str, str]:
     return image_data, media_type
 
 
-async def extract_uml_from_erd(image_path: str) -> Dict[str, Any]:
+async def extract_uml_from_erd(image_path: str, api_key: Optional[str] = None, model: Optional[str] = None) -> Dict[str, Any]:
     """
     Extract detailed UML structure from an ERD image.
-
-    Returns structured UML format with:
-    - classes: name, attributes (with visibility, type, keys), methods
-    - associations: source, target, type, multiplicities
-    - generalizations: inheritance relationships
+    Uses TAMU API (OpenAI-compatible) with vision support.
     """
-    client = get_client()
+    client = get_client(api_key=api_key)
+    resolved_model = model or TAMU_DEFAULT_MODEL
     image_data, media_type = encode_image(image_path)
 
     extraction_prompt = """Analyze this Entity-Relationship Diagram (ERD) image and convert it to a detailed UML class diagram structure.
@@ -128,31 +254,45 @@ Guidelines:
 Be thorough and extract ALL elements visible in the diagram.
 Only return the JSON object, no additional text."""
 
-    message = client.messages.create(
-        model="claude-sonnet-4-20250514",
-        max_tokens=4096,
-        messages=[
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "image",
-                        "source": {
-                            "type": "base64",
-                            "media_type": media_type,
-                            "data": image_data,
+    def _call_completion():
+        resp = client.chat.completions.create(
+            model=resolved_model,
+            max_tokens=4096,
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:{media_type};base64,{image_data}"
+                            }
                         },
-                    },
-                    {
-                        "type": "text",
-                        "text": extraction_prompt
-                    }
-                ],
-            }
-        ],
-    )
+                        {
+                            "type": "text",
+                            "text": extraction_prompt
+                        }
+                    ],
+                }
+            ],
+            stream=True,
+        )
+        return _collect_stream(resp)
 
-    response_text = message.content[0].text
+    try:
+        response_text = await asyncio.to_thread(_call_completion)
+    except Exception as e:
+        logger.error("ERD UML extraction API call failed: %s", e, exc_info=True)
+        response_text = ""
+
+
+    if not isinstance(response_text, str):
+        logger.warning("ERD UML extraction returned non-string: %s", type(response_text))
+        response_text = ""
+
+    logger.info("ERD UML extraction response length: %d", len(response_text))
+    if not response_text.strip():
+        logger.error("ERD UML extraction returned empty response - the model may not support vision/image input")
 
     try:
         if "```json" in response_text:
@@ -162,6 +302,13 @@ Only return the JSON object, no additional text."""
 
         return json.loads(response_text.strip())
     except json.JSONDecodeError:
+        repaired = _repair_truncated_json(response_text.strip())
+        if repaired:
+            try:
+                return json.loads(repaired)
+            except json.JSONDecodeError:
+                pass
+        logger.error("ERD UML extraction JSON parse failed (len=%d). End: %.300s", len(response_text), response_text[-300:])
         return {
             "raw_extraction": response_text,
             "classes": [],
@@ -171,7 +318,11 @@ Only return the JSON object, no additional text."""
         }
 
 
-async def extract_uml_from_multiple_images(image_paths: List[str]) -> Dict[str, Any]:
+async def extract_uml_from_multiple_images(
+    image_paths: List[str],
+    api_key: Optional[str] = None,
+    model: Optional[str] = None,
+) -> Dict[str, Any]:
     """
     Extract and merge UML structures from multiple ERD images.
     """
@@ -182,7 +333,7 @@ async def extract_uml_from_multiple_images(image_paths: List[str]) -> Dict[str, 
 
     for image_path in image_paths:
         try:
-            uml = await extract_uml_from_erd(image_path)
+            uml = await extract_uml_from_erd(image_path, api_key=api_key, model=model)
 
             # Merge results (avoiding duplicates by class name)
             existing_class_names = {c["name"] for c in all_classes}
@@ -236,11 +387,18 @@ def read_user_stories_from_files(repo_path: str, story_files: List[str]) -> str:
     return "\n\n---\n\n".join(all_stories)
 
 
-async def analyze_uml_against_stories(uml_structure: Dict[str, Any], user_stories: str) -> Dict[str, Any]:
+async def analyze_uml_against_stories(
+    uml_structure: Dict[str, Any],
+    user_stories: str,
+    api_key: Optional[str] = None,
+    model: Optional[str] = None,
+) -> Dict[str, Any]:
     """
     Analyze UML structure against user stories to find coverage issues.
+    Uses TAMU API (OpenAI-compatible).
     """
-    client = get_client()
+    client = get_client(api_key=api_key)
+    resolved_model = model or TAMU_DEFAULT_MODEL
 
     analysis_prompt = f"""You are an expert software architect and database analyst. Compare the following UML class diagram structure (derived from an ERD) against the user stories to identify mismatches and coverage issues.
 
@@ -319,15 +477,24 @@ Analyze whether the data model properly supports all the user stories. Return a 
 Be thorough but fair. Only flag genuine issues that would prevent the user stories from being properly implemented.
 Only return the JSON object, no additional text."""
 
-    message = client.messages.create(
-        model="claude-sonnet-4-20250514",
-        max_tokens=4096,
-        messages=[
-            {"role": "user", "content": analysis_prompt}
-        ],
-    )
+    def _call_completion():
+        resp = client.chat.completions.create(
+            model=resolved_model,
+            max_tokens=16384,
+            messages=[
+                {"role": "user", "content": analysis_prompt}
+            ],
+            stream=True,
+        )
+        return _collect_stream(resp)
 
-    response_text = message.content[0].text
+    try:
+        response_text = await asyncio.to_thread(_call_completion)
+    except Exception as e:
+        logger.error("Analysis API call failed: %s", e, exc_info=True)
+        response_text = ""
+    if not isinstance(response_text, str):
+        response_text = ""
 
     try:
         if "```json" in response_text:
@@ -337,6 +504,14 @@ Only return the JSON object, no additional text."""
 
         return json.loads(response_text.strip())
     except json.JSONDecodeError:
+        # Try to repair truncated JSON by closing open brackets/braces
+        repaired = _repair_truncated_json(response_text.strip())
+        if repaired:
+            try:
+                return json.loads(repaired)
+            except json.JSONDecodeError:
+                pass
+        logger.error("Analysis JSON parse failed (len=%d). End: %.300s", len(response_text), response_text[-300:])
         return {
             "summary": "Analysis completed but response parsing failed",
             "raw_analysis": response_text,
@@ -356,17 +531,13 @@ Only return the JSON object, no additional text."""
 
 async def run_erd_analysis(
     repository: Repository,
-    db: AsyncSession
+    db: AsyncSession,
+    api_key: Optional[str] = None,
+    model: Optional[str] = None,
 ) -> WorkflowResult:
     """
-    Run the complete ERD analysis workflow on a repository:
-
-    1. Get selected ERD images and user story files
-    2. Extract UML structure from ERD images
-    3. Analyze UML against user stories
-
-    Returns:
-        WorkflowResult with UML structure and analysis report
+    Run the complete ERD analysis workflow on a repository.
+    Uses TAMU API when api_key is provided (or from env).
     """
     repo_path = repository.local_path
 
@@ -401,7 +572,9 @@ async def run_erd_analysis(
             for f in erd_files
         ]
 
-        uml_structure = await extract_uml_from_multiple_images(erd_image_paths)
+        uml_structure = await extract_uml_from_multiple_images(
+            erd_image_paths, api_key=api_key, model=model
+        )
 
         # Validate UML extraction
         if not uml_structure.get("classes"):
@@ -423,7 +596,9 @@ async def run_erd_analysis(
             )
 
         # Run analysis
-        report = await analyze_uml_against_stories(uml_structure, user_stories)
+        report = await analyze_uml_against_stories(
+            uml_structure, user_stories, api_key=api_key, model=model
+        )
         coverage_score = report.get('coverage_score', 0)
 
         return WorkflowResult(

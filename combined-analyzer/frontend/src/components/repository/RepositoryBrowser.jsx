@@ -259,8 +259,15 @@ const styles = {
     padding: '20px',
     boxShadow: '0 2px 8px rgba(0,0,0,0.08)',
   },
+  sectionHeader: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: '12px',
+    marginBottom: '16px',
+  },
   sectionTitle: {
-    margin: '0 0 16px 0',
+    margin: 0,
     fontSize: '16px',
     color: '#333',
     display: 'flex',
@@ -276,6 +283,38 @@ const styles = {
     padding: '12px',
     borderRadius: '8px',
     marginBottom: '16px',
+  },
+  manualActions: {
+    backgroundColor: '#fff',
+    borderRadius: '12px',
+    padding: '16px 20px',
+    marginBottom: '20px',
+    boxShadow: '0 2px 8px rgba(0,0,0,0.08)',
+    display: 'flex',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    gap: '10px',
+  },
+  manualLabel: {
+    fontSize: '13px',
+    color: '#444',
+    fontWeight: '500',
+    marginRight: '6px',
+  },
+  actionButton: {
+    padding: '7px 12px',
+    borderRadius: '6px',
+    border: '1px solid #d1d5db',
+    backgroundColor: '#f8f9fa',
+    color: '#333',
+    cursor: 'pointer',
+    fontSize: '12px',
+    fontWeight: '500',
+  },
+  actionButtonDanger: {
+    backgroundColor: '#fff3f3',
+    border: '1px solid #f2b8b8',
+    color: '#a12828',
   },
   loading: {
     textAlign: 'center',
@@ -509,8 +548,8 @@ export default function RepositoryBrowser({ repositoryId, onBack, onAnalysisComp
     }
   };
 
-  const handleSelectAll = async (fileType, field, selected) => {
-    const fileIds = repository.discovered_files
+  const handleSelectAll = async (fileType, field, selected, explicitFileIds = null) => {
+    const fileIds = explicitFileIds || repository.discovered_files
       .filter((f) => {
         if (fileType === 'erd') {
           return f.file_type === 'erd_image' || f.file_type === 'user_story';
@@ -528,16 +567,82 @@ export default function RepositoryBrowser({ repositoryId, onBack, onAnalysisComp
         ...prev,
         discovered_files: prev.discovered_files.map((f) => {
           if (fileType === 'erd' && (f.file_type === 'erd_image' || f.file_type === 'user_story')) {
-            return { ...f, [field]: selected };
+            if (!explicitFileIds || explicitFileIds.includes(f.id)) {
+              return { ...f, [field]: selected };
+            }
           }
           if (fileType === 'integrity' && (f.file_type === 'code' || f.file_type === 'config')) {
-            return { ...f, [field]: selected };
+            if (!explicitFileIds || explicitFileIds.includes(f.id)) {
+              return { ...f, [field]: selected };
+            }
           }
           return f;
         }),
       }));
     } catch (err) {
       setError('Failed to update file selection');
+    }
+  };
+
+  const handleClearAiSelections = async () => {
+    const erdIds = erdFiles.map((f) => f.id);
+    const codeIds = integrityFiles.map((f) => f.id);
+    try {
+      if (erdIds.length > 0) {
+        await updateFileSelection(repositoryId, erdIds, false, 'erd');
+      }
+      if (codeIds.length > 0) {
+        await updateFileSelection(repositoryId, codeIds, false, 'integrity');
+      }
+      setRepository((prev) => ({
+        ...prev,
+        discovered_files: prev.discovered_files.map((f) => ({
+          ...f,
+          is_selected_erd:
+            f.file_type === 'erd_image' || f.file_type === 'user_story' ? false : f.is_selected_erd,
+          is_selected_integrity:
+            f.file_type === 'code' || f.file_type === 'config' ? false : f.is_selected_integrity,
+        })),
+      }));
+    } catch (err) {
+      setError('Failed to clear AI selections');
+    }
+  };
+
+  const handleClearAllSelections = async () => {
+    const erdIds = erdFiles.map((f) => f.id);
+    const codeIds = integrityFiles.map((f) => f.id);
+    try {
+      if (erdIds.length > 0) {
+        await updateFileSelection(repositoryId, erdIds, false, 'erd');
+      }
+      if (codeIds.length > 0) {
+        await updateFileSelection(repositoryId, codeIds, false, 'integrity');
+        await updateFileSelection(repositoryId, codeIds, false, 'compliance');
+        await updateFileSelection(repositoryId, codeIds, false, 'correctness');
+        await updateFileSelection(repositoryId, codeIds, false, 'usability');
+        await updateFileSelection(repositoryId, codeIds, false, 'maintainability');
+      }
+      setRepository((prev) => ({
+        ...prev,
+        discovered_files: prev.discovered_files.map((f) => ({
+          ...f,
+          is_selected_erd:
+            f.file_type === 'erd_image' || f.file_type === 'user_story' ? false : f.is_selected_erd,
+          is_selected_integrity:
+            f.file_type === 'code' || f.file_type === 'config' ? false : f.is_selected_integrity,
+          is_selected_compliance:
+            f.file_type === 'code' || f.file_type === 'config' ? false : f.is_selected_compliance,
+          is_selected_correctness:
+            f.file_type === 'code' || f.file_type === 'config' ? false : f.is_selected_correctness,
+          is_selected_usability:
+            f.file_type === 'code' || f.file_type === 'config' ? false : f.is_selected_usability,
+          is_selected_maintainability:
+            f.file_type === 'code' || f.file_type === 'config' ? false : f.is_selected_maintainability,
+        })),
+      }));
+    } catch (err) {
+      setError('Failed to clear file selections');
     }
   };
 
@@ -579,7 +684,7 @@ export default function RepositoryBrowser({ repositoryId, onBack, onAnalysisComp
     setError(null);
 
     const starters = {
-      erd: () => startERDAnalysis(repositoryId),
+      erd: () => startERDAnalysis(repositoryId, tamuApiKey, tamuModel),
       integrity: () => startIntegrityAnalysis(repositoryId, tamuApiKey, tamuModel),
       compliance: () => startComplianceAnalysis(repositoryId, tamuApiKey, tamuModel),
       correctness: () => startCorrectnessAnalysis(repositoryId, tamuApiKey, tamuModel),
