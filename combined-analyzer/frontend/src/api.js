@@ -1,6 +1,7 @@
 import axios from 'axios';
 
 const USER_ID_STORAGE_KEY = 'supabase_user_id';
+const SESSION_ID_STORAGE_KEY = 'github_session_id';
 
 /** Call this when the user logs in with Supabase (e.g. Google). Pass null to clear. */
 export function setCurrentUserId(userId) {
@@ -16,6 +17,20 @@ export function getCurrentUserId() {
   return localStorage.getItem(USER_ID_STORAGE_KEY) || null;
 }
 
+/** Store session_id received from the OAuth callback redirect.
+ *  Needed for cross-origin deployments where third-party cookies are blocked. */
+export function setSessionId(sessionId) {
+  if (sessionId == null || sessionId === '') {
+    localStorage.removeItem(SESSION_ID_STORAGE_KEY);
+  } else {
+    localStorage.setItem(SESSION_ID_STORAGE_KEY, String(sessionId));
+  }
+}
+
+export function getSessionId() {
+  return localStorage.getItem(SESSION_ID_STORAGE_KEY) || null;
+}
+
 const API_BASE = import.meta.env.VITE_API_URL || '/api';
 
 const api = axios.create({
@@ -27,6 +42,10 @@ api.interceptors.request.use((config) => {
   const userId = getCurrentUserId();
   if (userId) {
     config.headers['X-User-Id'] = userId;
+  }
+  const sessionId = getSessionId();
+  if (sessionId) {
+    config.headers['X-Session-Id'] = sessionId;
   }
   return config;
 });
@@ -85,10 +104,14 @@ export async function uploadFolder(zipFile, name = null, apiKey = '') {
 
 export function initiateGitHubAuth() {
   const userId = getCurrentUserId();
-  const url = userId
-    ? `${API_BASE}/github/auth?user_id=${encodeURIComponent(userId)}`
-    : `${API_BASE}/github/auth`;
-  window.location.href = url;
+  const params = new URLSearchParams();
+  if (userId) params.set('user_id', userId);
+  // Pass existing session_id so the backend can reuse it (cookie may not
+  // survive cross-origin redirect in browsers that block third-party cookies).
+  const sid = getSessionId();
+  if (sid) params.set('session_id', sid);
+  const qs = params.toString();
+  window.location.href = `${API_BASE}/github/auth${qs ? '?' + qs : ''}`;
 }
 
 export async function getGitHubAuthStatus() {
