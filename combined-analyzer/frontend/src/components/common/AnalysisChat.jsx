@@ -151,16 +151,32 @@ export default function AnalysisChat({ analysisId, analysisType, chatModel, chat
   const [inputValue, setInputValue] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [inputFocused, setInputFocused] = useState(false);
-  const messagesEndRef = useRef(null);
-  const inputRef = useRef(null);
+  const [isNearBottom, setIsNearBottom] = useState(true);
+  const messagesContainerRef = useRef(null);
+  const forceScrollOnNextUpdateRef = useRef(false);
 
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  const scrollToBottom = (smooth = true) => {
+    const container = messagesContainerRef.current;
+    if (!container) return;
+    container.scrollTo({
+      top: container.scrollHeight,
+      behavior: smooth ? 'smooth' : 'auto',
+    });
+  };
+
+  const handleMessagesScroll = () => {
+    const el = messagesContainerRef.current;
+    if (!el) return;
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    setIsNearBottom(distanceFromBottom < 80);
   };
 
   useEffect(() => {
-    scrollToBottom();
-  }, [messages]);
+    if (forceScrollOnNextUpdateRef.current || isNearBottom) {
+      scrollToBottom(forceScrollOnNextUpdateRef.current);
+      forceScrollOnNextUpdateRef.current = false;
+    }
+  }, [messages, isNearBottom]);
 
   const handleSend = async () => {
     const trimmedMessage = inputValue.trim();
@@ -168,6 +184,8 @@ export default function AnalysisChat({ analysisId, analysisType, chatModel, chat
 
     // Add user message
     const userMessage = { role: 'user', content: trimmedMessage };
+    forceScrollOnNextUpdateRef.current = true;
+    setIsNearBottom(true);
     setMessages(prev => [...prev, userMessage]);
     setInputValue('');
     setIsLoading(true);
@@ -328,7 +346,11 @@ export default function AnalysisChat({ analysisId, analysisType, chatModel, chat
         <span style={styles.headerTitle}>Ask about this analysis</span>
       </div>
 
-      <div style={styles.messagesContainer}>
+      <div
+        ref={messagesContainerRef}
+        style={styles.messagesContainer}
+        onScroll={handleMessagesScroll}
+      >
         {messages.length === 0 ? (
           <div style={styles.emptyState}>
             <div style={styles.emptyTitle}>Start a conversation</div>
@@ -394,14 +416,12 @@ export default function AnalysisChat({ analysisId, analysisType, chatModel, chat
                 </div>
               </div>
             ))}
-            <div ref={messagesEndRef} />
           </>
         )}
       </div>
 
       <div style={styles.inputContainer}>
         <input
-          ref={inputRef}
           type="text"
           placeholder="Ask a question about this analysis..."
           value={inputValue}

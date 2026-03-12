@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useMemo, useState } from 'react';
 
 const styles = {
   container: {
@@ -6,6 +6,19 @@ const styles = {
     overflowY: 'auto',
     border: '1px solid #e0e0e0',
     borderRadius: '8px',
+  },
+  searchRow: {
+    padding: '10px 16px',
+    borderBottom: '1px solid #e0e0e0',
+    backgroundColor: '#fff',
+  },
+  searchInput: {
+    width: '100%',
+    padding: '8px 10px',
+    borderRadius: '6px',
+    border: '1px solid #d7dce1',
+    fontSize: '12px',
+    outline: 'none',
   },
   selectAllRow: {
     display: 'flex',
@@ -127,6 +140,8 @@ function getFileTypeLabel(fileType) {
 }
 
 export default function FileList({ files, selectionField, onToggle, onSelectAll, scoreField, scoreLabel }) {
+  const [searchValue, setSearchValue] = useState('');
+
   if (!files || files.length === 0) {
     return (
       <div style={styles.emptyState}>
@@ -136,11 +151,31 @@ export default function FileList({ files, selectionField, onToggle, onSelectAll,
     );
   }
 
-  const allSelected = files.every((f) => f[selectionField]);
-  const someSelected = files.some((f) => f[selectionField]);
+  const filteredFiles = useMemo(() => {
+    const query = searchValue.trim().toLowerCase();
+    if (!query) return files;
+    return files.filter((f) => {
+      const path = (f.file_path || '').toLowerCase();
+      const type = (f.file_type || '').toLowerCase();
+      const language = (f.language || '').toLowerCase();
+      return path.includes(query) || type.includes(query) || language.includes(query);
+    });
+  }, [files, searchValue]);
+
+  const allSelected = filteredFiles.length > 0 && filteredFiles.every((f) => f[selectionField]);
+  const someSelected = filteredFiles.some((f) => f[selectionField]);
 
   return (
     <div style={styles.container}>
+      <div style={styles.searchRow}>
+        <input
+          type="text"
+          value={searchValue}
+          onChange={(e) => setSearchValue(e.target.value)}
+          placeholder="Filter files by path, type, or language..."
+          style={styles.searchInput}
+        />
+      </div>
       <div style={styles.selectAllRow}>
         <label style={styles.selectAllLabel}>
           <input
@@ -149,46 +184,56 @@ export default function FileList({ files, selectionField, onToggle, onSelectAll,
             ref={(el) => {
               if (el) el.indeterminate = someSelected && !allSelected;
             }}
-            onChange={(e) => onSelectAll(e.target.checked)}
+            onChange={(e) => {
+              if (filteredFiles.length === 0) return;
+              onSelectAll(e.target.checked, filteredFiles.map((f) => f.id));
+            }}
             style={styles.checkbox}
           />
-          Select all ({files.filter((f) => f[selectionField]).length}/{files.length})
+          Select visible ({filteredFiles.filter((f) => f[selectionField]).length}/{filteredFiles.length})
         </label>
       </div>
 
-      {files.map((file, idx) => (
-        <div
-          key={file.id}
-          style={{
-            ...styles.fileItem,
-            ...(idx === files.length - 1 ? styles.fileItemLast : {}),
-          }}
-        >
-          <input
-            type="checkbox"
-            checked={file[selectionField]}
-            onChange={() => onToggle(file.id, selectionField, file[selectionField])}
-            style={styles.checkbox}
-          />
-          <div style={styles.fileInfo}>
-            <div style={styles.fileName}>{file.file_path}</div>
-            <div style={styles.fileMeta}>
-              <span style={{ ...styles.badge, ...styles.typeBadge }}>
-                {getFileTypeLabel(file.file_type)}
-              </span>
-              {file.language && (
-                <span style={{ ...styles.badge, ...styles.languageBadge }}>{file.language}</span>
-              )}
-              <span style={{ ...styles.badge, ...styles.scoreBadge, ...getScoreStyle(file[scoreField]) }}>
-                {file[scoreField]}% {scoreLabel}
-              </span>
-            </div>
-            {file.content_preview && (
-              <div style={styles.preview}>{file.content_preview}</div>
-            )}
-          </div>
+      {filteredFiles.length === 0 ? (
+        <div style={styles.emptyState}>
+          <div style={styles.emptyIcon}>&#128269;</div>
+          <p>No files match the current filter</p>
         </div>
-      ))}
+      ) : (
+        filteredFiles.map((file, idx) => (
+          <div
+            key={file.id}
+            style={{
+              ...styles.fileItem,
+              ...(idx === filteredFiles.length - 1 ? styles.fileItemLast : {}),
+            }}
+          >
+            <input
+              type="checkbox"
+              checked={file[selectionField]}
+              onChange={() => onToggle(file.id, selectionField, file[selectionField])}
+              style={styles.checkbox}
+            />
+            <div style={styles.fileInfo}>
+              <div style={styles.fileName}>{file.file_path}</div>
+              <div style={styles.fileMeta}>
+                <span style={{ ...styles.badge, ...styles.typeBadge }}>
+                  {getFileTypeLabel(file.file_type)}
+                </span>
+                {file.language && (
+                  <span style={{ ...styles.badge, ...styles.languageBadge }}>{file.language}</span>
+                )}
+                <span style={{ ...styles.badge, ...styles.scoreBadge, ...getScoreStyle(file[scoreField]) }}>
+                  {file[scoreField]}% {scoreLabel}
+                </span>
+              </div>
+              {file.content_preview && (
+                <div style={styles.preview}>{file.content_preview}</div>
+              )}
+            </div>
+          </div>
+        ))
+      )}
     </div>
   );
 }
