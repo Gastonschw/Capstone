@@ -49,6 +49,8 @@ async def list_repositories(
     )
     if owner_uuid is not None:
         q = q.where(Repository.owner_user_id == owner_uuid)
+    # Only return the most recent 5 repositories for this user (or fewer if less exist)
+    q = q.limit(5)
     result = await db.execute(q)
     repositories = result.scalars().all()
 

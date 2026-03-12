@@ -151,7 +151,7 @@ export default function Sidebar({ repositories, selectedRepo, onRepositorySelect
             </p>
           </div>
         ) : (
-          repositories.map((repo) => (
+          repositories.slice(0, 5).map((repo) => (
             <div
               key={repo.id}
               style={{

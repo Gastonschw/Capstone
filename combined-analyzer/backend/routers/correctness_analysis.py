@@ -10,7 +10,7 @@ from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
-from database import get_db
+from database import get_db, AsyncSessionLocal
 from models.repository import Repository
 from models.correctness_analysis import CorrectnessAnalysis
 from schemas.correctness_analysis import CorrectnessAnalysisResponse, CorrectnessAnalysisListItem
@@ -38,17 +38,10 @@ def characteristic_report_to_dict(report) -> dict:
 async def run_analysis_task(
     analysis_id: int,
     repository_id: int,
-    db_url: str,
     api_key: Optional[str] = None,
     model: Optional[str] = None,
 ):
     """Background task to run Correctness analysis."""
-    from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
-    from sqlalchemy.orm import sessionmaker
-
-    engine = create_async_engine(db_url)
-    AsyncSessionLocal = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-
     async with AsyncSessionLocal() as db:
         result = await db.execute(
             select(CorrectnessAnalysis).where(CorrectnessAnalysis.id == analysis_id)
@@ -133,9 +126,8 @@ async def start_correctness_analysis(
     await db.commit()
     await db.refresh(analysis)
 
-    from config import DATABASE_URL
     background_tasks.add_task(
-        run_analysis_task, analysis.id, repository_id, DATABASE_URL, api_key, model,
+        run_analysis_task, analysis.id, repository_id, api_key, model,
     )
 
     return {"id": analysis.id, "status": analysis.status, "message": "Correctness analysis started"}

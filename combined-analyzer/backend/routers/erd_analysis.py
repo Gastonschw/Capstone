@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
-from database import get_db
+from database import get_db, AsyncSessionLocal
 from models.repository import Repository
 from models.erd_analysis import ERDAnalysis, AnalysisStatus
 from schemas.erd_analysis import ERDAnalysisResponse, ERDAnalysisListItem
@@ -18,14 +18,8 @@ from services.erd_analysis_service import run_erd_analysis
 router = APIRouter(prefix="/api/erd", tags=["erd-analysis"])
 
 
-async def run_analysis_task(analysis_id: int, repository_id: int, db_url: str):
+async def run_analysis_task(analysis_id: int, repository_id: int):
     """Background task to run ERD analysis."""
-    from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
-    from sqlalchemy.orm import sessionmaker
-
-    engine = create_async_engine(db_url)
-    AsyncSessionLocal = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-
     async with AsyncSessionLocal() as db:
         # Get analysis and repository
         result = await db.execute(
@@ -96,12 +90,10 @@ async def start_erd_analysis(
     await db.refresh(analysis)
 
     # Start background task
-    from config import DATABASE_URL
     background_tasks.add_task(
         run_analysis_task,
         analysis.id,
-        repository_id,
-        DATABASE_URL
+        repository_id
     )
 
     return {

@@ -252,7 +252,7 @@ const analysisGetters = {
   maintainability: getMaintainabilityAnalysis,
 };
 
-export async function pollAnalysis(type, analysisId, onUpdate, intervalMs = 2000) {
+export async function pollAnalysis(type, analysisId, onUpdate, intervalMs = 5000) {
   const getAnalysis = analysisGetters[type] || getIntegrityAnalysis;
 
   let errorCount = 0;
