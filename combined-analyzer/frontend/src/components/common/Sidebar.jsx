@@ -98,6 +98,7 @@ const styles = {
     display: 'flex',
     gap: '6px',
     marginTop: '6px',
+    flexWrap: 'wrap',
   },
   analysisBadge: {
     fontSize: '10px',
@@ -150,7 +151,7 @@ export default function Sidebar({ repositories, selectedRepo, onRepositorySelect
             </p>
           </div>
         ) : (
-          repositories.map((repo) => (
+          repositories.slice(0, 5).map((repo) => (
             <div
               key={repo.id}
               style={{
@@ -180,32 +181,32 @@ export default function Sidebar({ repositories, selectedRepo, onRepositorySelect
               <div style={styles.analysisBadges}>
                 {repo.erd_analysis_count > 0 && (
                   <span style={{ ...styles.analysisBadge, ...styles.erdBadge }}>
-                    {repo.erd_analysis_count} ERD
+                    ERD
                   </span>
                 )}
                 {repo.integrity_analysis_count > 0 && (
                   <span style={{ ...styles.analysisBadge, ...styles.integrityBadge }}>
-                    {repo.integrity_analysis_count} Integrity
+                    Integrity
                   </span>
                 )}
                 {repo.compliance_analysis_count > 0 && (
                   <span style={{ ...styles.analysisBadge, ...styles.complianceBadge }}>
-                    {repo.compliance_analysis_count} Compliance
+                    Compliance
                   </span>
                 )}
                 {repo.correctness_analysis_count > 0 && (
                   <span style={{ ...styles.analysisBadge, ...styles.correctnessBadge }}>
-                    {repo.correctness_analysis_count} Correctness
+                    Correctness
                   </span>
                 )}
                 {repo.usability_analysis_count > 0 && (
                   <span style={{ ...styles.analysisBadge, ...styles.usabilityBadge }}>
-                    {repo.usability_analysis_count} Usability
+                    Usability
                   </span>
                 )}
                 {repo.maintainability_analysis_count > 0 && (
                   <span style={{ ...styles.analysisBadge, ...styles.maintainabilityBadge }}>
-                    {repo.maintainability_analysis_count} Maintainability
+                    Maintainability
                   </span>
                 )}
               </div>

@@ -11,6 +11,18 @@ import {
   startUsabilityAnalysis,
   startMaintainabilityAnalysis,
   pollAnalysis,
+  listERDAnalyses,
+  listIntegrityAnalyses,
+  listComplianceAnalyses,
+  listCorrectnessAnalyses,
+  listUsabilityAnalyses,
+  listMaintainabilityAnalyses,
+  getERDAnalysis,
+  getIntegrityAnalysis,
+  getComplianceAnalysis,
+  getCorrectnessAnalysis,
+  getUsabilityAnalysis,
+  getMaintainabilityAnalysis,
 } from '../../api';
 import AnalysisTypeSelector from './AnalysisTypeSelector';
 import FileList from './FileList';
@@ -18,6 +30,162 @@ import FileList from './FileList';
 const styles = {
   container: {
     maxWidth: '900px',
+  },
+  latestSection: {
+    backgroundColor: '#fff',
+    borderRadius: '12px',
+    padding: '20px',
+    boxShadow: '0 2px 8px rgba(0,0,0,0.08)',
+    marginBottom: '20px',
+  },
+  latestHeaderRow: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: '12px',
+    flexWrap: 'wrap',
+    marginBottom: '12px',
+  },
+  latestTitle: {
+    margin: 0,
+    fontSize: '16px',
+    fontWeight: '600',
+    color: '#333',
+    display: 'flex',
+    alignItems: 'center',
+    gap: '8px',
+  },
+  latestGrid: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))',
+    gap: '12px',
+  },
+  latestCard: {
+    border: '1px solid #e0e0e0',
+    borderRadius: '12px',
+    padding: '14px',
+    backgroundColor: '#fafbfc',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '10px',
+    minHeight: '140px',
+  },
+  latestCardTop: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    gap: '12px',
+  },
+  latestCardTitle: {
+    margin: 0,
+    fontSize: '14px',
+    fontWeight: '600',
+    color: '#1e3a5f',
+    display: 'flex',
+    alignItems: 'center',
+    gap: '8px',
+  },
+  latestBadge: {
+    fontSize: '11px',
+    padding: '4px 10px',
+    borderRadius: '999px',
+    fontWeight: '600',
+    whiteSpace: 'nowrap',
+  },
+  badgeCompleted: { backgroundColor: '#e8f5e9', color: '#2e7d32' },
+  badgeProcessing: { backgroundColor: '#fff3cd', color: '#856404' },
+  badgeFailed: { backgroundColor: '#f8d7da', color: '#721c24' },
+  badgeNone: { backgroundColor: '#e9ecef', color: '#495057' },
+  latestMetricsRow: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: '12px',
+  },
+  latestScore: {
+    fontSize: '28px',
+    fontWeight: '700',
+    color: '#333',
+    lineHeight: 1,
+  },
+  latestScoreLabel: {
+    fontSize: '12px',
+    color: '#666',
+    marginTop: '4px',
+  },
+  latestMeta: {
+    fontSize: '12px',
+    color: '#666',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '4px',
+    textAlign: 'right',
+  },
+  latestActions: {
+    display: 'flex',
+    gap: '8px',
+    flexWrap: 'wrap',
+  },
+  smallButton: {
+    padding: '8px 12px',
+    borderRadius: '8px',
+    border: '1px solid #d0d7de',
+    cursor: 'pointer',
+    fontSize: '12px',
+    fontWeight: '600',
+    backgroundColor: '#fff',
+    color: '#1e3a5f',
+  },
+  primarySmallButton: {
+    backgroundColor: '#1e3a5f',
+    color: '#fff',
+    border: '1px solid #1e3a5f',
+  },
+  latestError: {
+    marginTop: '10px',
+    fontSize: '13px',
+    color: '#721c24',
+    backgroundColor: '#f8d7da',
+    borderRadius: '8px',
+    padding: '10px 12px',
+  },
+  expanderButton: {
+    padding: '10px 14px',
+    borderRadius: '10px',
+    border: '1px solid #d0d7de',
+    cursor: 'pointer',
+    fontSize: '13px',
+    fontWeight: '600',
+    backgroundColor: '#fff',
+    color: '#1e3a5f',
+  },
+  expanderButtonPrimary: {
+    backgroundColor: '#1e3a5f',
+    border: '1px solid #1e3a5f',
+    color: '#fff',
+  },
+  newRunPanel: {
+    backgroundColor: '#fff',
+    borderRadius: '12px',
+    padding: '20px',
+    boxShadow: '0 2px 8px rgba(0,0,0,0.08)',
+    marginTop: '16px',
+  },
+  newRunHeader: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: '12px',
+    marginBottom: '12px',
+  },
+  newRunTitle: {
+    margin: 0,
+    fontSize: '16px',
+    fontWeight: '600',
+    color: '#333',
+    display: 'flex',
+    alignItems: 'center',
+    gap: '8px',
   },
   header: {
     backgroundColor: '#fff',
@@ -82,7 +250,7 @@ const styles = {
   },
   content: {
     display: 'grid',
-    gridTemplateColumns: '1fr 1fr',
+    gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))',
     gap: '20px',
   },
   section: {
@@ -199,6 +367,25 @@ export default function RepositoryBrowser({ repositoryId, onBack, onAnalysisComp
   const [refreshing, setRefreshing] = useState(false);
   const [analyzing, setAnalyzing] = useState(false);
   const [error, setError] = useState(null);
+  const [latestRuns, setLatestRuns] = useState({
+    erd: null,
+    integrity: null,
+    compliance: null,
+    correctness: null,
+    usability: null,
+    maintainability: null,
+  });
+  const [latestLoading, setLatestLoading] = useState(false);
+  const [latestError, setLatestError] = useState('');
+  const [showNewRun, setShowNewRun] = useState(false);
+  const [runningTypes, setRunningTypes] = useState({
+    erd: false,
+    integrity: false,
+    compliance: false,
+    correctness: false,
+    usability: false,
+    maintainability: false,
+  });
   const [analysisTypes, setAnalysisTypes] = useState({
     erd: false, integrity: false, compliance: false, correctness: false,
     usability: false, maintainability: false,
@@ -206,6 +393,7 @@ export default function RepositoryBrowser({ repositoryId, onBack, onAnalysisComp
 
   useEffect(() => {
     loadRepository();
+    loadLatestRuns();
   }, [repositoryId]);
 
   const loadRepository = async () => {
@@ -218,6 +406,121 @@ export default function RepositoryBrowser({ repositoryId, onBack, onAnalysisComp
       setError('Failed to load repository');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const loadLatestRuns = async () => {
+    setLatestLoading(true);
+    setLatestError('');
+    try {
+      const [
+        erdList,
+        integrityList,
+        complianceList,
+        correctnessList,
+        usabilityList,
+        maintainabilityList,
+      ] = await Promise.all([
+        listERDAnalyses(repositoryId).catch(() => []),
+        listIntegrityAnalyses(repositoryId).catch(() => []),
+        listComplianceAnalyses(repositoryId).catch(() => []),
+        listCorrectnessAnalyses(repositoryId).catch(() => []),
+        listUsabilityAnalyses(repositoryId).catch(() => []),
+        listMaintainabilityAnalyses(repositoryId).catch(() => []),
+      ]);
+
+      const pickLatestCompleted = (list) => {
+        if (!Array.isArray(list)) return null;
+        return list.find((item) => item && item.status === 'completed') || null;
+      };
+
+      const next = {
+        erd: pickLatestCompleted(erdList),
+        integrity: pickLatestCompleted(integrityList),
+        compliance: pickLatestCompleted(complianceList),
+        correctness: pickLatestCompleted(correctnessList),
+        usability: pickLatestCompleted(usabilityList),
+        maintainability: pickLatestCompleted(maintainabilityList),
+      };
+      setLatestRuns(next);
+    } catch (e) {
+      setLatestError('Failed to load latest results');
+      setLatestRuns({
+        erd: null,
+        integrity: null,
+        compliance: null,
+        correctness: null,
+        usability: null,
+        maintainability: null,
+      });
+    } finally {
+      setLatestLoading(false);
+    }
+  };
+
+  const analysisGetters = {
+    erd: getERDAnalysis,
+    integrity: getIntegrityAnalysis,
+    compliance: getComplianceAnalysis,
+    correctness: getCorrectnessAnalysis,
+    usability: getUsabilityAnalysis,
+    maintainability: getMaintainabilityAnalysis,
+  };
+
+  const getLatestScore = (type, run) => {
+    if (!run) return null;
+    if (type === 'erd') {
+      const v = run.coverage_score;
+      return typeof v === 'number' ? v : null;
+    }
+    const v = run.overall_score;
+    return typeof v === 'number' ? v : null;
+  };
+
+  const formatDateTime = (value) => {
+    if (!value) return '—';
+    const d = new Date(value);
+    if (Number.isNaN(d.getTime())) return '—';
+    return d.toLocaleString();
+  };
+
+  const getStatusBadgeStyle = (status, hasRun) => {
+    if (hasRun && status === 'completed') {
+      return { ...styles.latestBadge, ...styles.badgeCompleted };
+    }
+    return { ...styles.latestBadge, ...styles.badgeNone };
+  };
+
+  const getStatusLabel = (status, hasRun) => {
+    if (hasRun && status === 'completed') {
+      return 'Completed';
+    }
+    return 'No runs';
+  };
+
+  const openNewRunPanelFor = (type) => {
+    setShowNewRun(true);
+    setAnalysisTypes({
+      erd: false,
+      integrity: false,
+      compliance: false,
+      correctness: false,
+      usability: false,
+      maintainability: false,
+      [type]: true,
+    });
+  };
+
+  const handleViewLatest = async (type) => {
+    const run = latestRuns[type];
+    if (!run?.id) return;
+    const getter = analysisGetters[type];
+    if (!getter) return;
+    try {
+      const full = await getter(run.id);
+      onAnalysisComplete(full, type);
+    } catch (e) {
+      setLatestError('Failed to open report');
     }
   };
 
@@ -349,6 +652,7 @@ export default function RepositoryBrowser({ repositoryId, onBack, onAnalysisComp
     try {
       await rediscoverFiles(repositoryId);
       await loadRepository();
+      await loadLatestRuns();
     } catch (err) {
       setError('Failed to refresh files');
     } finally {
@@ -401,14 +705,16 @@ export default function RepositoryBrowser({ repositoryId, onBack, onAnalysisComp
         const analysis = await starters[type]();
         console.log(`Started ${type} analysis with id=${analysis.id}`);
         startedAnalyses.push({ type, id: analysis.id });
+        setRunningTypes((prev) => ({ ...prev, [type]: true }));
       }
 
-      // Poll each analysis independently
+      // Poll each analysis independently (update status but do not auto-navigate)
       for (const { type, id } of startedAnalyses) {
         pollAnalysis(type, id, (updatedAnalysis) => {
           if (updatedAnalysis.status === 'completed' || updatedAnalysis.status === 'failed') {
             completedCount++;
-            onAnalysisComplete(updatedAnalysis, type);
+            setRunningTypes((prev) => ({ ...prev, [type]: false }));
+            loadLatestRuns();
             if (completedCount >= total) {
               setAnalyzing(false);
             }
@@ -473,6 +779,15 @@ export default function RepositoryBrowser({ repositoryId, onBack, onAnalysisComp
 
   const canAnalyze = Object.keys(analysisTypes).some((t) => analysisTypes[t] && canAnalyzeMap[t]);
 
+  const latestCards = [
+    { type: 'erd', label: 'ERD', icon: '📊', scoreLabel: 'Coverage' },
+    { type: 'integrity', label: 'Integrity', icon: '🔒', scoreLabel: 'Overall' },
+    { type: 'compliance', label: 'Compliance', icon: '✅', scoreLabel: 'Overall' },
+    { type: 'correctness', label: 'Correctness', icon: '✔️', scoreLabel: 'Overall' },
+    { type: 'usability', label: 'Usability', icon: '🧑‍💻', scoreLabel: 'Overall' },
+    { type: 'maintainability', label: 'Maintainability', icon: '⚙️', scoreLabel: 'Overall' },
+  ];
+
   return (
     <div style={styles.container}>
       <style>{`@keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }`}</style>
@@ -514,173 +829,262 @@ export default function RepositoryBrowser({ repositoryId, onBack, onAnalysisComp
 
       {error && <div style={styles.error}>{error}</div>}
 
-      <div style={styles.manualActions}>
-        <span style={styles.manualLabel}>Manual file selection:</span>
-        <button style={styles.actionButton} onClick={handleClearAiSelections}>
-          Clear AI defaults
-        </button>
-        <button
-          style={{ ...styles.actionButton, ...styles.actionButtonDanger }}
-          onClick={handleClearAllSelections}
-        >
-          Clear all analyzer selections
-        </button>
+      <div style={styles.latestSection}>
+        <div style={styles.latestHeaderRow}>
+          <h3 style={styles.latestTitle}>📌 Latest results</h3>
+          <span style={{ fontSize: '12px', color: '#666', flex: '1 1 100%' }}>
+            Each card shows the most recent run for that tool. Use New run / Run again to configure and start analyses.
+          </span>
+          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+            <button
+              style={{ ...styles.expanderButton, ...(showNewRun ? {} : styles.expanderButtonPrimary) }}
+              onClick={() => setShowNewRun((v) => !v)}
+            >
+              {showNewRun ? 'Hide new run' : 'New run / Run again'}
+            </button>
+            <button style={styles.expanderButton} onClick={loadLatestRuns} disabled={latestLoading}>
+              {latestLoading ? 'Refreshing…' : 'Refresh results'}
+            </button>
+          </div>
+        </div>
+
+        <div style={styles.latestGrid}>
+          {latestCards.map((c) => {
+            const run = latestRuns[c.type];
+            const status = run?.status;
+            const isCompleted = status === 'completed';
+            const isRunning = runningTypes[c.type];
+            const hasRun = Boolean(run && run.id);
+            const score = getLatestScore(c.type, run);
+
+            let badgeStyle;
+            let badgeLabel;
+            if (isRunning) {
+              badgeStyle = { ...styles.latestBadge, ...styles.badgeProcessing };
+              badgeLabel = 'Running…';
+            } else {
+              badgeStyle = getStatusBadgeStyle(status, hasRun);
+              badgeLabel = getStatusLabel(status, hasRun);
+            }
+
+            const showScore = !isRunning && score != null;
+
+            return (
+              <div key={c.type} style={styles.latestCard}>
+                <div
+                  onClick={() => {
+                    if (!isRunning && isCompleted && run?.id) {
+                      handleViewLatest(c.type);
+                    }
+                  }}
+                  style={{ cursor: !isRunning && isCompleted && run?.id ? 'pointer' : 'default' }}
+                >
+                  <div style={styles.latestCardTop}>
+                    <h4 style={styles.latestCardTitle}>
+                      <span>{c.icon}</span>
+                      <span>{c.label}</span>
+                    </h4>
+                    <span style={badgeStyle}>{badgeLabel}</span>
+                  </div>
+
+                  <div style={styles.latestMetricsRow}>
+                    <div>
+                      <div style={styles.latestScore}>{showScore ? Math.round(score) : '—'}</div>
+                      <div style={styles.latestScoreLabel}>{c.scoreLabel} score</div>
+                    </div>
+                    <div style={styles.latestMeta}>
+                      <div>Created: {formatDateTime(run?.created_at)}</div>
+                      <div>Completed: {formatDateTime(run?.completed_at)}</div>
+                    </div>
+                  </div>
+                </div>
+
+                <div style={styles.latestActions}>
+                  <button
+                    style={{ ...styles.smallButton, ...styles.primarySmallButton }}
+                    onClick={() => openNewRunPanelFor(c.type)}
+                  >
+                    {isCompleted ? 'Run again' : 'Run'}
+                  </button>
+                  {isCompleted && !isRunning && (
+                    <button
+                      style={styles.smallButton}
+                      onClick={() => handleViewLatest(c.type)}
+                      disabled={!run?.id}
+                    >
+                      View report
+                    </button>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        {latestError && <div style={styles.latestError}>{latestError}</div>}
       </div>
 
-      <div style={styles.content}>
-        <div style={styles.section}>
-          <div style={styles.sectionHeader}>
-            <h3 style={styles.sectionTitle}>
-              <span style={styles.sectionIcon}>&#128202;</span>
-              ERD Analysis Files ({selectedErdCount} selected)
-            </h3>
+      {showNewRun && (
+        <div style={styles.newRunPanel}>
+          <div style={styles.newRunHeader}>
+            <h3 style={styles.newRunTitle}>🧪 New run</h3>
+            <button style={styles.expanderButton} onClick={() => setShowNewRun(false)}>
+              Collapse
+            </button>
           </div>
-          <FileList
-            files={erdFiles}
-            selectionField="is_selected_erd"
-            onToggle={handleFileToggle}
-            onSelectAll={(selected, fileIds) => handleSelectAll('erd', 'is_selected_erd', selected, fileIds)}
-            scoreField="confidence_score"
-            scoreLabel="Confidence"
-          />
-        </div>
 
-        <div style={styles.section}>
-          <div style={styles.sectionHeader}>
-            <h3 style={styles.sectionTitle}>
-              <span style={styles.sectionIcon}>&#128274;</span>
-              Code Analysis Files ({selectedIntegrityCount} selected for Integrity)
-            </h3>
-          </div>
-          <FileList
-            files={integrityFiles}
-            selectionField="is_selected_integrity"
-            onToggle={handleFileToggle}
-            onSelectAll={(selected, fileIds) => handleSelectAll('integrity', 'is_selected_integrity', selected, fileIds)}
-            scoreField="relevance_score"
-            scoreLabel="Relevance"
-          />
-        </div>
-      </div>
+          <div style={styles.content}>
+            <div style={styles.section}>
+              <h3 style={styles.sectionTitle}>
+                <span style={styles.sectionIcon}>&#128202;</span>
+                ERD Analysis Files ({selectedErdCount} selected)
+              </h3>
+              <FileList
+                files={erdFiles}
+                selectionField="is_selected_erd"
+                onToggle={handleFileToggle}
+                onSelectAll={(selected) => handleSelectAll('erd', 'is_selected_erd', selected)}
+                scoreField="confidence_score"
+                scoreLabel="Confidence"
+              />
+            </div>
 
-      <div style={{ ...styles.content, marginTop: '20px' }}>
-        <div style={styles.section}>
-          <div style={styles.sectionHeader}>
-            <h3 style={styles.sectionTitle}>
-              <span style={styles.sectionIcon}>&#9989;</span>
-              Compliance Files ({integrityFiles.filter((f) => f.is_selected_compliance).length} selected)
-            </h3>
+            <div style={styles.section}>
+              <h3 style={styles.sectionTitle}>
+                <span style={styles.sectionIcon}>&#128274;</span>
+                Code Analysis Files ({selectedIntegrityCount} selected for Integrity)
+              </h3>
+              <FileList
+                files={integrityFiles}
+                selectionField="is_selected_integrity"
+                onToggle={handleFileToggle}
+                onSelectAll={(selected) => handleSelectAll('integrity', 'is_selected_integrity', selected)}
+                scoreField="relevance_score"
+                scoreLabel="Relevance"
+              />
+            </div>
           </div>
-          <FileList
-            files={integrityFiles}
-            selectionField="is_selected_compliance"
-            onToggle={handleFileToggle}
-            onSelectAll={(selected, fileIds) => handleSelectAll('integrity', 'is_selected_compliance', selected, fileIds)}
-            scoreField="relevance_score"
-            scoreLabel="Relevance"
-          />
-        </div>
-        <div style={styles.section}>
-          <div style={styles.sectionHeader}>
-            <h3 style={styles.sectionTitle}>
-              <span style={styles.sectionIcon}>&#10004;</span>
-              Correctness Files ({integrityFiles.filter((f) => f.is_selected_correctness).length} selected)
-            </h3>
-          </div>
-          <FileList
-            files={integrityFiles}
-            selectionField="is_selected_correctness"
-            onToggle={handleFileToggle}
-            onSelectAll={(selected, fileIds) => handleSelectAll('integrity', 'is_selected_correctness', selected, fileIds)}
-            scoreField="relevance_score"
-            scoreLabel="Relevance"
-          />
-        </div>
-      </div>
-      <div style={{ ...styles.content, marginTop: '20px' }}>
-        <div style={styles.section}>
-          <div style={styles.sectionHeader}>
-            <h3 style={styles.sectionTitle}>
-              <span style={styles.sectionIcon}>&#128100;</span>
-              Usability Files ({integrityFiles.filter((f) => f.is_selected_usability).length} selected)
-            </h3>
-          </div>
-          <FileList
-            files={integrityFiles}
-            selectionField="is_selected_usability"
-            onToggle={handleFileToggle}
-            onSelectAll={(selected, fileIds) => handleSelectAll('integrity', 'is_selected_usability', selected, fileIds)}
-            scoreField="relevance_score"
-            scoreLabel="Relevance"
-          />
-        </div>
-        <div style={styles.section}>
-          <div style={styles.sectionHeader}>
-            <h3 style={styles.sectionTitle}>
-              <span style={styles.sectionIcon}>&#9881;</span>
-              Maintainability Files ({integrityFiles.filter((f) => f.is_selected_maintainability).length} selected)
-            </h3>
-          </div>
-          <FileList
-            files={integrityFiles}
-            selectionField="is_selected_maintainability"
-            onToggle={handleFileToggle}
-            onSelectAll={(selected, fileIds) => handleSelectAll('integrity', 'is_selected_maintainability', selected, fileIds)}
-            scoreField="relevance_score"
-            scoreLabel="Relevance"
-          />
-        </div>
-      </div>
 
-      <div style={styles.analyzeSection}>
-        <AnalysisTypeSelector
-          analysisTypes={analysisTypes}
-          onChange={setAnalysisTypes}
-          canAnalyzeErd={canAnalyzeErd}
-          canAnalyzeIntegrity={canAnalyzeIntegrity}
-          canAnalyzeCompliance={canAnalyzeCompliance}
-          canAnalyzeCorrectness={canAnalyzeCorrectness}
-          canAnalyzeUsability={canAnalyzeUsability}
-          canAnalyzeMaintainability={canAnalyzeMaintainability}
-        />
+          {(analysisTypes.compliance || analysisTypes.correctness || analysisTypes.usability || analysisTypes.maintainability) && (
+            <div style={{ ...styles.content, marginTop: '20px' }}>
+              {analysisTypes.compliance && (
+                <div style={styles.section}>
+                  <h3 style={styles.sectionTitle}>
+                    <span style={styles.sectionIcon}>&#9989;</span>
+                    Compliance Files ({integrityFiles.filter((f) => f.is_selected_compliance).length} selected)
+                  </h3>
+                  <FileList
+                    files={integrityFiles}
+                    selectionField="is_selected_compliance"
+                    onToggle={handleFileToggle}
+                    onSelectAll={(selected) => handleSelectAll('integrity', 'is_selected_compliance', selected)}
+                    scoreField="relevance_score"
+                    scoreLabel="Relevance"
+                  />
+                </div>
+              )}
+              {analysisTypes.correctness && (
+                <div style={styles.section}>
+                  <h3 style={styles.sectionTitle}>
+                    <span style={styles.sectionIcon}>&#10004;</span>
+                    Correctness Files ({integrityFiles.filter((f) => f.is_selected_correctness).length} selected)
+                  </h3>
+                  <FileList
+                    files={integrityFiles}
+                    selectionField="is_selected_correctness"
+                    onToggle={handleFileToggle}
+                    onSelectAll={(selected) => handleSelectAll('integrity', 'is_selected_correctness', selected)}
+                    scoreField="relevance_score"
+                    scoreLabel="Relevance"
+                  />
+                </div>
+              )}
+              {analysisTypes.usability && (
+                <div style={styles.section}>
+                  <h3 style={styles.sectionTitle}>
+                    <span style={styles.sectionIcon}>&#128100;</span>
+                    Usability Files ({integrityFiles.filter((f) => f.is_selected_usability).length} selected)
+                  </h3>
+                  <FileList
+                    files={integrityFiles}
+                    selectionField="is_selected_usability"
+                    onToggle={handleFileToggle}
+                    onSelectAll={(selected) => handleSelectAll('integrity', 'is_selected_usability', selected)}
+                    scoreField="relevance_score"
+                    scoreLabel="Relevance"
+                  />
+                </div>
+              )}
+              {analysisTypes.maintainability && (
+                <div style={styles.section}>
+                  <h3 style={styles.sectionTitle}>
+                    <span style={styles.sectionIcon}>&#9881;</span>
+                    Maintainability Files ({integrityFiles.filter((f) => f.is_selected_maintainability).length} selected)
+                  </h3>
+                  <FileList
+                    files={integrityFiles}
+                    selectionField="is_selected_maintainability"
+                    onToggle={handleFileToggle}
+                    onSelectAll={(selected) => handleSelectAll('integrity', 'is_selected_maintainability', selected)}
+                    scoreField="relevance_score"
+                    scoreLabel="Relevance"
+                  />
+                </div>
+              )}
+            </div>
+          )}
 
-        <button
-          onClick={handleAnalyze}
-          disabled={!canAnalyze || analyzing}
-          style={{
-            ...styles.analyzeButton,
-            ...(!canAnalyze || analyzing ? styles.analyzeButtonDisabled : {}),
-          }}
-        >
-          {analyzing ? 'Analyzing...' : 'Start Analysis'}
-        </button>
+          <div style={styles.analyzeSection}>
+            <AnalysisTypeSelector
+              analysisTypes={analysisTypes}
+              onChange={setAnalysisTypes}
+              canAnalyzeErd={canAnalyzeErd}
+              canAnalyzeIntegrity={canAnalyzeIntegrity}
+              canAnalyzeCompliance={canAnalyzeCompliance}
+              canAnalyzeCorrectness={canAnalyzeCorrectness}
+              canAnalyzeUsability={canAnalyzeUsability}
+              canAnalyzeMaintainability={canAnalyzeMaintainability}
+            />
 
-        {!canAnalyze && (
-          <p style={styles.hint}>
-            {analysisTypes.erd && !canAnalyzeErd && (
-              <>For ERD analysis, select at least one ERD image and one user story file. </>
+            <button
+              onClick={handleAnalyze}
+              disabled={!canAnalyze || analyzing}
+              style={{
+                ...styles.analyzeButton,
+                ...(!canAnalyze || analyzing ? styles.analyzeButtonDisabled : {}),
+              }}
+            >
+              {analyzing ? 'Analyzing...' : 'Start Analysis'}
+            </button>
+
+            {!canAnalyze && (
+              <p style={styles.hint}>
+                {analysisTypes.erd && !canAnalyzeErd && (
+                  <>For ERD analysis, select at least one ERD image and one user story file. </>
+                )}
+                {analysisTypes.integrity && !canAnalyzeIntegrity && (
+                  <>For Integrity analysis, select at least one code or config file. </>
+                )}
+                {analysisTypes.compliance && !canAnalyzeCompliance && (
+                  <>For Compliance analysis, select code/config files below. </>
+                )}
+                {analysisTypes.correctness && !canAnalyzeCorrectness && (
+                  <>For Correctness analysis, select code/config files below. </>
+                )}
+                {analysisTypes.usability && !canAnalyzeUsability && (
+                  <>For Usability analysis, select code/config files below. </>
+                )}
+                {analysisTypes.maintainability && !canAnalyzeMaintainability && (
+                  <>For Maintainability analysis, select code/config files below. </>
+                )}
+                {!Object.values(analysisTypes).some(Boolean) && (
+                  <>Select an analysis type above to begin. </>
+                )}
+              </p>
             )}
-            {analysisTypes.integrity && !canAnalyzeIntegrity && (
-              <>For Integrity analysis, select at least one code or config file. </>
-            )}
-            {analysisTypes.compliance && !canAnalyzeCompliance && (
-              <>For Compliance analysis, select code/config files below. </>
-            )}
-            {analysisTypes.correctness && !canAnalyzeCorrectness && (
-              <>For Correctness analysis, select code/config files below. </>
-            )}
-            {analysisTypes.usability && !canAnalyzeUsability && (
-              <>For Usability analysis, select code/config files below. </>
-            )}
-            {analysisTypes.maintainability && !canAnalyzeMaintainability && (
-              <>For Maintainability analysis, select code/config files below. </>
-            )}
-            {!Object.values(analysisTypes).some(Boolean) && (
-              <>Select an analysis type above to begin. </>
-            )}
-          </p>
-        )}
-      </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

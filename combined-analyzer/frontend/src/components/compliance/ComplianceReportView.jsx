@@ -161,7 +161,7 @@ export default function ComplianceReportView({ analysisId, onBack, chatModel, ch
 
       {showApiHint && (
         <div style={styles.apiHint}>
-          <strong>API response incomplete.</strong> Ensure the TAMU API key is set.
+          <strong>API response incomplete.</strong> Ensure sufficient api tokens are available and the TAMU API key is set.
         </div>
       )}
 
