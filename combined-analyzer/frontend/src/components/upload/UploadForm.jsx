@@ -285,7 +285,7 @@ export default function UploadForm({ onRepositoryCreated, tamuApiKey = '' }) {
     setError(null);
 
     try {
-      const repository = await uploadFolder(zipFile);
+      const repository = await uploadFolder(zipFile, null, tamuApiKey);
       setSuccess(`Repository "${repository.name}" uploaded successfully!`);
       setZipFile(null);
       onRepositoryCreated(repository);

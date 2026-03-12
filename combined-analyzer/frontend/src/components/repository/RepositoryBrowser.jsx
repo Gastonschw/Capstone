@@ -275,7 +275,7 @@ export default function RepositoryBrowser({ repositoryId, onBack, onAnalysisComp
     setError(null);
 
     const starters = {
-      erd: () => startERDAnalysis(repositoryId),
+      erd: () => startERDAnalysis(repositoryId, tamuApiKey, tamuModel),
       integrity: () => startIntegrityAnalysis(repositoryId, tamuApiKey, tamuModel),
       compliance: () => startComplianceAnalysis(repositoryId, tamuApiKey, tamuModel),
       correctness: () => startCorrectnessAnalysis(repositoryId, tamuApiKey, tamuModel),

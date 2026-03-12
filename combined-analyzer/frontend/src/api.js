@@ -64,18 +64,19 @@ export async function rediscoverFiles(repositoryId) {
 
 // ============== Folder Upload ==============
 
-export async function uploadFolder(zipFile, name = null) {
+export async function uploadFolder(zipFile, name = null, apiKey = '') {
   const formData = new FormData();
   formData.append('file', zipFile);
   if (name) {
     formData.append('name', name);
   }
 
-  const response = await api.post('/upload-folder', formData, {
-    headers: {
-      'Content-Type': 'multipart/form-data',
-    },
-  });
+  const headers = { 'Content-Type': 'multipart/form-data' };
+  if (apiKey) {
+    headers['X-TAMU-API-Key'] = apiKey;
+  }
+
+  const response = await api.post('/upload-folder', formData, { headers });
 
   return response.data;
 }
@@ -116,8 +117,13 @@ export async function logoutGitHub() {
 
 // ============== ERD Analysis ==============
 
-export async function startERDAnalysis(repositoryId) {
-  const response = await api.post(`/erd/repository/${repositoryId}/analyze`);
+export async function startERDAnalysis(repositoryId, apiKey = '', model = '') {
+  const body = {};
+  if (apiKey) body.api_key = apiKey;
+  if (model) body.model = model;
+  const headers = {};
+  if (apiKey) headers['X-TAMU-API-Key'] = apiKey;
+  const response = await api.post(`/erd/repository/${repositoryId}/analyze`, body, { headers });
   return response.data;
 }
 
