@@ -2,7 +2,8 @@
 File upload API routes.
 """
 
-from fastapi import APIRouter, Depends, File, UploadFile, Form, Request
+from typing import Optional
+from fastapi import APIRouter, Depends, File, Header, UploadFile, Form, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import get_db
@@ -19,6 +20,7 @@ async def upload_folder(
     file: UploadFile = File(...),
     name: str = Form(None),
     db: AsyncSession = Depends(get_db),
+    tamu_api_key: Optional[str] = Header(default=None, alias="X-TAMU-API-Key"),
 ):
     """Upload a ZIP file containing a repository. Optionally scoped to user via X-User-Id header."""
     owner_user_id = get_optional_user_id(request)
@@ -28,7 +30,8 @@ async def upload_folder(
     discovery_stats = await run_file_discovery(
         repository.local_path,
         db,
-        repository.id
+        repository.id,
+        api_key=tamu_api_key,
     )
 
     return {

@@ -98,6 +98,11 @@ export default function AnalyzerPage() {
 
     const params = new URLSearchParams(window.location.search);
     if (params.get('github_auth')) {
+      // Store session_id from OAuth callback (cross-origin cookie fallback)
+      const sid = params.get('session_id');
+      if (sid) {
+        import('../api').then(({ setSessionId }) => setSessionId(sid));
+      }
       window.history.replaceState({}, '', window.location.pathname);
     }
   }, []);
