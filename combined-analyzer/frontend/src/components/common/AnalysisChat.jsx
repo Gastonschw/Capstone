@@ -221,13 +221,14 @@ export default function AnalysisChat({ analysisId, analysisType, chatModel, chat
         setIsLoading(false);
       },
       (error) => {
-        // Error
+        // Error: show backend message (e.g. "TAMU API key is not configured") when available
+        const message = error?.message || 'Sorry, an error occurred. Please try again.';
         setMessages(prev => {
           const updated = [...prev];
           const lastIdx = updated.length - 1;
           updated[lastIdx] = {
             ...updated[lastIdx],
-            content: updated[lastIdx].content || 'Sorry, an error occurred. Please try again.',
+            content: updated[lastIdx].content || message,
           };
           return updated;
         });

@@ -361,9 +361,11 @@ export async function sendChatMessage(
     'Content-Type': 'application/json',
   };
 
-  if (apiKey) {
-    headers['X-TAMU-API-Key'] = apiKey;
-  }
+  const userId = getCurrentUserId();
+  if (userId) headers['X-User-Id'] = userId;
+  const sessionId = getSessionId();
+  if (sessionId) headers['X-Session-Id'] = sessionId;
+  if (apiKey) headers['X-TAMU-API-Key'] = apiKey;
 
   try {
     const body = {
@@ -377,10 +379,19 @@ export async function sendChatMessage(
       method: 'POST',
       headers,
       body: JSON.stringify(body),
+      credentials: 'include',
     });
 
     if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status}`);
+      let detail = `Request failed (${response.status})`;
+      try {
+        const data = await response.json();
+        if (data?.detail) detail = typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail);
+      } catch {
+        const text = await response.text();
+        if (text) detail = text;
+      }
+      throw new Error(detail);
     }
 
     const reader = response.body.getReader();
