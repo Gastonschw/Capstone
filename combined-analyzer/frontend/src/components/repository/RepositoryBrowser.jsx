@@ -714,9 +714,9 @@ export default function RepositoryBrowser({ repositoryId, onBack, onAnalysisComp
           if (updatedAnalysis.status === 'completed' || updatedAnalysis.status === 'failed') {
             completedCount++;
             setRunningTypes((prev) => ({ ...prev, [type]: false }));
-            loadLatestRuns();
             if (completedCount >= total) {
               setAnalyzing(false);
+              loadLatestRuns();
             }
           }
         });
