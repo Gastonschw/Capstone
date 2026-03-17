@@ -421,7 +421,7 @@ async def stream_erd_chat(
         max_tokens=2048,
         messages=messages,
         stream=True,
-        temperature=0,
+        temperature=1,
     )
 
     for chunk in stream:
@@ -506,7 +506,7 @@ async def _stream_analysis_chat(
         max_tokens=2048,
         messages=messages,
         stream=True,
-        temperature=0,
+        temperature=1,
     )
 
     for chunk in stream_resp:
@@ -576,7 +576,7 @@ async def stream_integrity_chat(
         max_tokens=2048,
         messages=messages,
         stream=True,
-        temperature=0,
+        temperature=1,
     )
 
     for chunk in integrity_stream:
