@@ -900,12 +900,14 @@ export default function RepositoryBrowser({ repositoryId, onBack, onAnalysisComp
                 </div>
 
                 <div style={styles.latestActions}>
-                  <button
-                    style={{ ...styles.smallButton, ...styles.primarySmallButton }}
-                    onClick={() => openNewRunPanelFor(c.type)}
-                  >
-                    {isCompleted ? 'Run again' : 'Run'}
-                  </button>
+                  {!isCompleted && (
+                    <button
+                      style={{ ...styles.smallButton, ...styles.primarySmallButton }}
+                      onClick={() => openNewRunPanelFor(c.type)}
+                    >
+                      Run
+                    </button>
+                  )}
                   {isCompleted && !isRunning && (
                     <button
                       style={styles.smallButton}
