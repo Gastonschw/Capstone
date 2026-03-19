@@ -15,6 +15,7 @@ from models.repository import Repository
 from models.correctness_analysis import CorrectnessAnalysis
 from schemas.correctness_analysis import CorrectnessAnalysisResponse, CorrectnessAnalysisListItem
 from services.correctness_analysis_service import run_correctness_analysis
+from concurrency import analysis_semaphore
 
 router = APIRouter(prefix="/api/correctness", tags=["correctness-analysis"])
 
@@ -42,7 +43,7 @@ async def run_analysis_task(
     model: Optional[str] = None,
 ):
     """Background task to run Correctness analysis."""
-    async with AsyncSessionLocal() as db:
+    async with analysis_semaphore, AsyncSessionLocal() as db:
         result = await db.execute(
             select(CorrectnessAnalysis).where(CorrectnessAnalysis.id == analysis_id)
         )

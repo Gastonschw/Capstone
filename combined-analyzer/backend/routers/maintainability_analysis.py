@@ -15,6 +15,7 @@ from models.repository import Repository
 from models.maintainability_analysis import MaintainabilityAnalysis
 from schemas.maintainability_analysis import MaintainabilityAnalysisResponse, MaintainabilityAnalysisListItem
 from services.maintainability_analysis_service import run_maintainability_analysis
+from concurrency import analysis_semaphore
 
 router = APIRouter(prefix="/api/maintainability", tags=["maintainability-analysis"])
 
@@ -42,7 +43,7 @@ async def run_analysis_task(
     model: Optional[str] = None,
 ):
     """Background task to run Maintainability analysis."""
-    async with AsyncSessionLocal() as db:
+    async with analysis_semaphore, AsyncSessionLocal() as db:
         result = await db.execute(
             select(MaintainabilityAnalysis).where(MaintainabilityAnalysis.id == analysis_id)
         )

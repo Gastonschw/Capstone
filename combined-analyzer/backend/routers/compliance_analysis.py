@@ -15,6 +15,7 @@ from models.repository import Repository
 from models.compliance_analysis import ComplianceAnalysis
 from schemas.compliance_analysis import ComplianceAnalysisResponse, ComplianceAnalysisListItem
 from services.compliance_analysis_service import run_compliance_analysis
+from concurrency import analysis_semaphore
 
 router = APIRouter(prefix="/api/compliance", tags=["compliance-analysis"])
 
@@ -43,7 +44,7 @@ async def run_analysis_task(
     model: Optional[str] = None,
 ):
     """Background task to run Compliance analysis."""
-    async with AsyncSessionLocal() as db:
+    async with analysis_semaphore, AsyncSessionLocal() as db:
         result = await db.execute(
             select(ComplianceAnalysis).where(ComplianceAnalysis.id == analysis_id)
         )

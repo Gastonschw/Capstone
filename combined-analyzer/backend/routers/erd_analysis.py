@@ -15,6 +15,7 @@ from models.repository import Repository
 from models.erd_analysis import ERDAnalysis, AnalysisStatus
 from schemas.erd_analysis import ERDAnalysisResponse, ERDAnalysisListItem
 from services.erd_analysis_service import run_erd_analysis
+from concurrency import analysis_semaphore
 
 router = APIRouter(prefix="/api/erd", tags=["erd-analysis"])
 
@@ -32,7 +33,7 @@ async def run_analysis_task(
     model: Optional[str] = None,
 ):
     """Background task to run ERD analysis."""
-    async with AsyncSessionLocal() as db:
+    async with analysis_semaphore, AsyncSessionLocal() as db:
         # Get analysis and repository
         result = await db.execute(
             select(ERDAnalysis).where(ERDAnalysis.id == analysis_id)

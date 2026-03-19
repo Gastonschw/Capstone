@@ -15,6 +15,7 @@ from models.repository import Repository
 from models.usability_analysis import UsabilityAnalysis
 from schemas.usability_analysis import UsabilityAnalysisResponse, UsabilityAnalysisListItem
 from services.usability_analysis_service import run_usability_analysis
+from concurrency import analysis_semaphore
 
 router = APIRouter(prefix="/api/usability", tags=["usability-analysis"])
 
@@ -42,7 +43,7 @@ async def run_analysis_task(
     model: Optional[str] = None,
 ):
     """Background task to run Usability analysis."""
-    async with AsyncSessionLocal() as db:
+    async with analysis_semaphore, AsyncSessionLocal() as db:
         result = await db.execute(
             select(UsabilityAnalysis).where(UsabilityAnalysis.id == analysis_id)
         )

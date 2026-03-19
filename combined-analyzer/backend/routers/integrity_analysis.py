@@ -16,6 +16,7 @@ from models.repository import Repository
 from models.integrity_analysis import IntegrityAnalysis
 from schemas.integrity_analysis import IntegrityAnalysisResponse, IntegrityAnalysisListItem
 from services.integrity_analysis_service import run_integrity_analysis
+from concurrency import analysis_semaphore
 
 router = APIRouter(prefix="/api/integrity", tags=["integrity-analysis"])
 
@@ -44,7 +45,7 @@ async def run_analysis_task(
     model: Optional[str] = None,
 ):
     """Background task to run Integrity analysis. Uses TAMU API with api_key and optional model."""
-    async with AsyncSessionLocal() as db:
+    async with analysis_semaphore, AsyncSessionLocal() as db:
         # Get analysis and repository
         result = await db.execute(
             select(IntegrityAnalysis).where(IntegrityAnalysis.id == analysis_id)
