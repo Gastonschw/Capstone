@@ -695,8 +695,8 @@ export default function RepositoryBrowser({ repositoryId, onBack, onAnalysisComp
     const selectedTypes = Object.keys(analysisTypes).filter((t) => analysisTypes[t]);
     if (selectedTypes.length === 0) return;
 
-    let completedCount = 0;
     const total = selectedTypes.length;
+    const terminalAnalysisIds = new Set();
 
     try {
       // Start each analysis sequentially to avoid race conditions
@@ -712,11 +712,13 @@ export default function RepositoryBrowser({ repositoryId, onBack, onAnalysisComp
       for (const { type, id } of startedAnalyses) {
         pollAnalysis(type, id, (updatedAnalysis) => {
           if (updatedAnalysis.status === 'completed' || updatedAnalysis.status === 'failed') {
-            completedCount++;
+            if (terminalAnalysisIds.has(id)) return;
+            terminalAnalysisIds.add(id);
             setRunningTypes((prev) => ({ ...prev, [type]: false }));
-            if (completedCount >= total) {
+            // Refresh cards as each run finishes so users see scores without waiting for the whole batch
+            loadLatestRuns();
+            if (terminalAnalysisIds.size >= total) {
               setAnalyzing(false);
-              loadLatestRuns();
             }
           }
         });
@@ -862,6 +864,9 @@ export default function RepositoryBrowser({ repositoryId, onBack, onAnalysisComp
             if (isRunning) {
               badgeStyle = { ...styles.latestBadge, ...styles.badgeProcessing };
               badgeLabel = 'Running…';
+            } else if (latestLoading) {
+              badgeStyle = { ...styles.latestBadge, ...styles.badgeProcessing };
+              badgeLabel = 'Loading…';
             } else {
               badgeStyle = getStatusBadgeStyle(status, hasRun);
               badgeLabel = getStatusLabel(status, hasRun);

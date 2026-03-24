@@ -49,9 +49,8 @@ _cors_origins = [
     "http://localhost:3000",
     "http://127.0.0.1:5173",
     "http://127.0.0.1:3000",
+    FRONTEND_URL,
 ]
-if FRONTEND_URL and FRONTEND_URL not in _cors_origins:
-    _cors_origins.append(FRONTEND_URL)
 
 app.add_middleware(
     CORSMiddleware,
