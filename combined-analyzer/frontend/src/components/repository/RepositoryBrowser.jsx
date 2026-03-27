@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   getRepository,
   updateFileSelection,
@@ -391,11 +391,6 @@ export default function RepositoryBrowser({ repositoryId, onBack, onAnalysisComp
     usability: false, maintainability: false,
   });
 
-  useEffect(() => {
-    loadRepository();
-    loadLatestRuns();
-  }, [repositoryId]);
-
   const loadRepository = async () => {
     setLoading(true);
     setError(null);
@@ -409,7 +404,7 @@ export default function RepositoryBrowser({ repositoryId, onBack, onAnalysisComp
     }
   };
 
-  const loadLatestRuns = async () => {
+  const loadLatestRuns = useCallback(async () => {
     setLatestLoading(true);
     setLatestError('');
     try {
@@ -429,18 +424,19 @@ export default function RepositoryBrowser({ repositoryId, onBack, onAnalysisComp
         listMaintainabilityAnalyses(repositoryId).catch(() => []),
       ]);
 
-      const pickLatestCompleted = (list) => {
-        if (!Array.isArray(list)) return null;
-        return list.find((item) => item && item.status === 'completed') || null;
+      // APIs return newest first; surface the latest run for any status so in-progress jobs are visible.
+      const pickLatestRun = (list) => {
+        if (!Array.isArray(list) || list.length === 0) return null;
+        return list[0];
       };
 
       const next = {
-        erd: pickLatestCompleted(erdList),
-        integrity: pickLatestCompleted(integrityList),
-        compliance: pickLatestCompleted(complianceList),
-        correctness: pickLatestCompleted(correctnessList),
-        usability: pickLatestCompleted(usabilityList),
-        maintainability: pickLatestCompleted(maintainabilityList),
+        erd: pickLatestRun(erdList),
+        integrity: pickLatestRun(integrityList),
+        compliance: pickLatestRun(complianceList),
+        correctness: pickLatestRun(correctnessList),
+        usability: pickLatestRun(usabilityList),
+        maintainability: pickLatestRun(maintainabilityList),
       };
       setLatestRuns(next);
     } catch (e) {
@@ -456,7 +452,24 @@ export default function RepositoryBrowser({ repositoryId, onBack, onAnalysisComp
     } finally {
       setLatestLoading(false);
     }
-  };
+  }, [repositoryId]);
+
+  useEffect(() => {
+    loadRepository();
+    loadLatestRuns();
+  }, [repositoryId, loadLatestRuns]);
+
+  useEffect(() => {
+    if (loading || !repository) return undefined;
+    const busy = Object.values(latestRuns).some(
+      (r) => r && (r.status === 'pending' || r.status === 'processing')
+    );
+    if (!busy) return undefined;
+    const id = setInterval(() => {
+      loadLatestRuns();
+    }, 5000);
+    return () => clearInterval(id);
+  }, [latestRuns, loading, repository, loadLatestRuns]);
 
   const analysisGetters = {
     erd: getERDAnalysis,
@@ -485,17 +498,22 @@ export default function RepositoryBrowser({ repositoryId, onBack, onAnalysisComp
   };
 
   const getStatusBadgeStyle = (status, hasRun) => {
-    if (hasRun && status === 'completed') {
-      return { ...styles.latestBadge, ...styles.badgeCompleted };
+    if (!hasRun) return { ...styles.latestBadge, ...styles.badgeNone };
+    if (status === 'completed') return { ...styles.latestBadge, ...styles.badgeCompleted };
+    if (status === 'pending' || status === 'processing') {
+      return { ...styles.latestBadge, ...styles.badgeProcessing };
     }
+    if (status === 'failed') return { ...styles.latestBadge, ...styles.badgeFailed };
     return { ...styles.latestBadge, ...styles.badgeNone };
   };
 
   const getStatusLabel = (status, hasRun) => {
-    if (hasRun && status === 'completed') {
-      return 'Completed';
-    }
-    return 'No runs';
+    if (!hasRun) return 'No runs';
+    if (status === 'completed') return 'Completed';
+    if (status === 'pending') return 'Pending…';
+    if (status === 'processing') return 'Running…';
+    if (status === 'failed') return 'Failed';
+    return status || 'Unknown';
   };
 
   const openNewRunPanelFor = (type) => {
@@ -712,6 +730,8 @@ export default function RepositoryBrowser({ repositoryId, onBack, onAnalysisComp
         setRunningTypes((prev) => ({ ...prev, [type]: true }));
       }
 
+      await loadLatestRuns();
+
       // Poll each analysis independently (update status but do not auto-navigate)
       for (const { type, id } of startedAnalyses) {
         pollAnalysis(type, id, (updatedAnalysis) => {
@@ -874,7 +894,8 @@ export default function RepositoryBrowser({ repositoryId, onBack, onAnalysisComp
             const run = latestRuns[c.type];
             const status = run?.status;
             const isCompleted = status === 'completed';
-            const isRunning = runningTypes[c.type];
+            const isInProgress = status === 'pending' || status === 'processing';
+            const isRunning = isInProgress || runningTypes[c.type];
             const hasRun = Boolean(run && run.id);
             const score = getLatestScore(c.type, run);
 
@@ -924,8 +945,9 @@ export default function RepositoryBrowser({ repositoryId, onBack, onAnalysisComp
                 </div>
 
                 <div style={styles.latestActions}>
-                  {!isCompleted && (
+                  {!isCompleted && !isInProgress && (
                     <button
+                      type="button"
                       style={{ ...styles.smallButton, ...styles.primarySmallButton }}
                       onClick={() => openNewRunPanelFor(c.type)}
                     >
