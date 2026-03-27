@@ -500,15 +500,7 @@ export default function RepositoryBrowser({ repositoryId, onBack, onAnalysisComp
 
   const openNewRunPanelFor = (type) => {
     setShowNewRun(true);
-    setAnalysisTypes({
-      erd: false,
-      integrity: false,
-      compliance: false,
-      correctness: false,
-      usability: false,
-      maintainability: false,
-      [type]: true,
-    });
+    setAnalysisTypes((prev) => ({ ...prev, [type]: true }));
   };
 
   const handleViewLatest = async (type) => {
@@ -593,6 +585,10 @@ export default function RepositoryBrowser({ repositoryId, onBack, onAnalysisComp
       }
       if (codeIds.length > 0) {
         await updateFileSelection(repositoryId, codeIds, false, 'integrity');
+        await updateFileSelection(repositoryId, codeIds, false, 'compliance');
+        await updateFileSelection(repositoryId, codeIds, false, 'correctness');
+        await updateFileSelection(repositoryId, codeIds, false, 'usability');
+        await updateFileSelection(repositoryId, codeIds, false, 'maintainability');
       }
       setRepository((prev) => ({
         ...prev,
@@ -602,6 +598,14 @@ export default function RepositoryBrowser({ repositoryId, onBack, onAnalysisComp
             f.file_type === 'erd_image' || f.file_type === 'user_story' ? false : f.is_selected_erd,
           is_selected_integrity:
             f.file_type === 'code' || f.file_type === 'config' ? false : f.is_selected_integrity,
+          is_selected_compliance:
+            f.file_type === 'code' || f.file_type === 'config' ? false : f.is_selected_compliance,
+          is_selected_correctness:
+            f.file_type === 'code' || f.file_type === 'config' ? false : f.is_selected_correctness,
+          is_selected_usability:
+            f.file_type === 'code' || f.file_type === 'config' ? false : f.is_selected_usability,
+          is_selected_maintainability:
+            f.file_type === 'code' || f.file_type === 'config' ? false : f.is_selected_maintainability,
         })),
       }));
     } catch (err) {
@@ -839,8 +843,23 @@ export default function RepositoryBrowser({ repositoryId, onBack, onAnalysisComp
           </span>
           <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
             <button
+              type="button"
               style={{ ...styles.expanderButton, ...(showNewRun ? {} : styles.expanderButtonPrimary) }}
-              onClick={() => setShowNewRun((v) => !v)}
+              onClick={() => {
+                setShowNewRun((open) => {
+                  if (!open) {
+                    setAnalysisTypes({
+                      erd: false,
+                      integrity: false,
+                      compliance: false,
+                      correctness: false,
+                      usability: false,
+                      maintainability: false,
+                    });
+                  }
+                  return !open;
+                });
+              }}
             >
               {showNewRun ? 'Hide new run' : 'New run / Run again'}
             </button>
@@ -935,42 +954,48 @@ export default function RepositoryBrowser({ repositoryId, onBack, onAnalysisComp
         <div style={styles.newRunPanel}>
           <div style={styles.newRunHeader}>
             <h3 style={styles.newRunTitle}>🧪 New run</h3>
-            <button style={styles.expanderButton} onClick={() => setShowNewRun(false)}>
+            <button type="button" style={styles.expanderButton} onClick={() => setShowNewRun(false)}>
               Collapse
             </button>
           </div>
 
-          <div style={styles.content}>
-            <div style={styles.section}>
-              <h3 style={styles.sectionTitle}>
-                <span style={styles.sectionIcon}>&#128202;</span>
-                ERD Analysis Files ({selectedErdCount} selected)
-              </h3>
-              <FileList
-                files={erdFiles}
-                selectionField="is_selected_erd"
-                onToggle={handleFileToggle}
-                onSelectAll={(selected) => handleSelectAll('erd', 'is_selected_erd', selected)}
-                scoreField="confidence_score"
-                scoreLabel="Confidence"
-              />
-            </div>
+          {(analysisTypes.erd || analysisTypes.integrity) && (
+            <div style={styles.content}>
+              {analysisTypes.erd && (
+                <div style={styles.section}>
+                  <h3 style={styles.sectionTitle}>
+                    <span style={styles.sectionIcon}>&#128202;</span>
+                    ERD Analysis Files ({selectedErdCount} selected)
+                  </h3>
+                  <FileList
+                    files={erdFiles}
+                    selectionField="is_selected_erd"
+                    onToggle={handleFileToggle}
+                    onSelectAll={(selected) => handleSelectAll('erd', 'is_selected_erd', selected)}
+                    scoreField="confidence_score"
+                    scoreLabel="Confidence"
+                  />
+                </div>
+              )}
 
-            <div style={styles.section}>
-              <h3 style={styles.sectionTitle}>
-                <span style={styles.sectionIcon}>&#128274;</span>
-                Code Analysis Files ({selectedIntegrityCount} selected for Integrity)
-              </h3>
-              <FileList
-                files={integrityFiles}
-                selectionField="is_selected_integrity"
-                onToggle={handleFileToggle}
-                onSelectAll={(selected) => handleSelectAll('integrity', 'is_selected_integrity', selected)}
-                scoreField="relevance_score"
-                scoreLabel="Relevance"
-              />
+              {analysisTypes.integrity && (
+                <div style={styles.section}>
+                  <h3 style={styles.sectionTitle}>
+                    <span style={styles.sectionIcon}>&#128274;</span>
+                    Code Analysis Files ({selectedIntegrityCount} selected for Integrity)
+                  </h3>
+                  <FileList
+                    files={integrityFiles}
+                    selectionField="is_selected_integrity"
+                    onToggle={handleFileToggle}
+                    onSelectAll={(selected) => handleSelectAll('integrity', 'is_selected_integrity', selected)}
+                    scoreField="relevance_score"
+                    scoreLabel="Relevance"
+                  />
+                </div>
+              )}
             </div>
-          </div>
+          )}
 
           {(analysisTypes.compliance || analysisTypes.correctness || analysisTypes.usability || analysisTypes.maintainability) && (
             <div style={{ ...styles.content, marginTop: '20px' }}>
