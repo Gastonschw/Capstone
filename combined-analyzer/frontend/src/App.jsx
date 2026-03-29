@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Routes, Route, useNavigate, useLocation } from 'react-router-dom';
 import LandingPage from './pages/LandingPage';
 import AnalyzerPage from './pages/AnalyzerPage';
+import ComparisonPage from './pages/ComparisonPage';
 import { setCurrentUserId } from './api';
 import { supabase, isSupabaseConfigured } from './lib/supabaseClient';
 
@@ -52,7 +53,7 @@ export default function App() {
       return;
     }
 
-    if (!authUser && isSupabaseConfigured && pathname === '/analyzer') {
+    if (!authUser && isSupabaseConfigured && (pathname === '/analyzer' || pathname === '/compare')) {
       if (!window.location.hash) {
         navigate('/', { replace: true });
       }
@@ -76,6 +77,7 @@ export default function App() {
     <Routes>
       <Route path="/" element={<LandingPage loginError={loginError} onClearLoginError={() => setLoginError(null)} />} />
       <Route path="/analyzer" element={<AnalyzerPage />} />
+      <Route path="/compare" element={<ComparisonPage />} />
     </Routes>
   );
 }

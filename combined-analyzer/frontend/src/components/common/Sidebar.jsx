@@ -34,6 +34,21 @@ const styles = {
     fontSize: '13px',
     fontWeight: '500',
   },
+  headerActions: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '6px',
+  },
+  compareButton: {
+    backgroundColor: '#eef2f7',
+    color: '#1e3a5f',
+    border: '1px solid #d0d7de',
+    padding: '8px 12px',
+    borderRadius: '6px',
+    cursor: 'pointer',
+    fontSize: '12px',
+    fontWeight: '600',
+  },
   repoList: {
     flex: 1,
     overflowY: 'auto',
@@ -131,14 +146,19 @@ const styles = {
   },
 };
 
-export default function Sidebar({ repositories, selectedRepo, onRepositorySelect, onNewAnalysis }) {
+export default function Sidebar({ repositories, selectedRepo, onRepositorySelect, onNewAnalysis, onOpenComparison }) {
   return (
     <aside style={styles.sidebar}>
       <div style={styles.header}>
         <h2 style={styles.title}>Repositories</h2>
-        <button style={styles.newButton} onClick={onNewAnalysis}>
-          + New
-        </button>
+        <div style={styles.headerActions}>
+          <button style={styles.compareButton} onClick={onOpenComparison}>
+            Compare
+          </button>
+          <button style={styles.newButton} onClick={onNewAnalysis}>
+            + New
+          </button>
+        </div>
       </div>
 
       <div style={styles.repoList}>

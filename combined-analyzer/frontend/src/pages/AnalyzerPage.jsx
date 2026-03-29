@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import Header from '../components/common/Header';
 import Sidebar from '../components/common/Sidebar';
 import UploadForm from '../components/upload/UploadForm';
@@ -79,6 +80,7 @@ const styles = {
 };
 
 export default function AnalyzerPage() {
+  const navigate = useNavigate();
   const [repositories, setRepositories] = useState([]);
   const [selectedRepo, setSelectedRepo] = useState(null);
   const [view, setView] = useState('upload');
@@ -335,6 +337,7 @@ export default function AnalyzerPage() {
           repositories={repositories}
           selectedRepo={selectedRepo}
           onRepositorySelect={handleRepositorySelect}
+          onOpenComparison={() => navigate('/compare')}
           onNewAnalysis={() => {
             setSelectedRepo(null);
             setView('upload');

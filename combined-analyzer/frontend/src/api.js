@@ -270,6 +270,50 @@ export async function getMaintainabilityAnalysis(analysisId) {
   return response.data;
 }
 
+// ============== ISO Analysis Helpers ==============
+
+export const ISO_ANALYSIS_TYPES = ['integrity', 'compliance', 'correctness', 'usability', 'maintainability'];
+
+export const ISO_ANALYSIS_LABELS = {
+  integrity: 'Integrity',
+  compliance: 'Compliance',
+  correctness: 'Correctness',
+  usability: 'Usability',
+  maintainability: 'Maintainability',
+};
+
+const isoListAnalysisMap = {
+  integrity: listIntegrityAnalyses,
+  compliance: listComplianceAnalyses,
+  correctness: listCorrectnessAnalyses,
+  usability: listUsabilityAnalyses,
+  maintainability: listMaintainabilityAnalyses,
+};
+
+const isoGetAnalysisMap = {
+  integrity: getIntegrityAnalysis,
+  compliance: getComplianceAnalysis,
+  correctness: getCorrectnessAnalysis,
+  usability: getUsabilityAnalysis,
+  maintainability: getMaintainabilityAnalysis,
+};
+
+export async function listIsoAnalysesByType(type, repositoryId) {
+  const listFn = isoListAnalysisMap[type];
+  if (!listFn) {
+    throw new Error(`Unsupported ISO analysis type: ${type}`);
+  }
+  return listFn(repositoryId);
+}
+
+export async function getIsoAnalysisByType(type, analysisId) {
+  const getFn = isoGetAnalysisMap[type];
+  if (!getFn) {
+    throw new Error(`Unsupported ISO analysis type: ${type}`);
+  }
+  return getFn(analysisId);
+}
+
 // ============== Polling ==============
 
 const analysisGetters = {
