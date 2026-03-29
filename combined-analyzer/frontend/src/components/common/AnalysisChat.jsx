@@ -1,6 +1,4 @@
 import React, { useState, useRef, useEffect } from 'react';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
 import { sendChatMessage } from '../../api';
 
 const styles = {
@@ -82,6 +80,10 @@ const styles = {
     color: '#333',
     borderBottomLeftRadius: '4px',
   },
+  assistantText: {
+    whiteSpace: 'pre-wrap',
+    margin: 0,
+  },
   inputContainer: {
     padding: '16px',
     borderTop: '1px solid #e0e0e0',
@@ -144,6 +146,29 @@ function stripThinkTags(content) {
   if (!content) return '';
   // Remove <think>...</think> blocks (including multiline)
   return content.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+}
+
+// Force assistant content into plain text with standard characters and whitespace.
+function sanitizeAssistantPlainText(content) {
+  if (!content) return '';
+
+  let cleaned = stripThinkTags(content);
+
+  // Remove markdown fence markers while preserving inner code text.
+  cleaned = cleaned.replace(/^\s*```[^\n]*\n?/gm, '');
+  cleaned = cleaned.replace(/^\s*```\s*$/gm, '');
+
+  // Remove common markdown formatting markers.
+  cleaned = cleaned.replace(/`([^`]*)`/g, '$1');
+  cleaned = cleaned.replace(/^\s{0,3}#{1,6}\s+/gm, '');
+  cleaned = cleaned.replace(/^\s{0,3}>\s?/gm, '');
+  cleaned = cleaned.replace(/^\s*[-*+]\s+/gm, '');
+  cleaned = cleaned.replace(/^\s*\d+\.\s+/gm, '');
+
+  // Keep tabs/newlines/CR and printable ASCII only.
+  cleaned = cleaned.replace(/[^\x09\x0A\x0D\x20-\x7E]/g, '');
+
+  return cleaned.trim();
 }
 
 export default function AnalysisChat({ analysisId, analysisType, chatModel, chatApiKey }) {
@@ -288,58 +313,6 @@ export default function AnalysisChat({ analysisId, analysisType, chatModel, chat
         .dot-1 { animation-delay: 0s; }
         .dot-2 { animation-delay: 0.2s; }
         .dot-3 { animation-delay: 0.4s; }
-        .markdown-content p { margin: 0 0 8px 0; }
-        .markdown-content p:last-child { margin-bottom: 0; }
-        .markdown-content ul, .markdown-content ol {
-          margin: 8px 0;
-          padding-left: 24px;
-          list-style-position: outside;
-        }
-        .markdown-content ul { list-style-type: disc; }
-        .markdown-content ol { list-style-type: decimal; }
-        .markdown-content li {
-          margin: 4px 0;
-          display: list-item;
-        }
-        .markdown-content table {
-          border-collapse: collapse;
-          margin: 8px 0;
-          width: 100%;
-        }
-        .markdown-content th, .markdown-content td {
-          border: 1px solid #ddd;
-          padding: 8px;
-          text-align: left;
-        }
-        .markdown-content th {
-          background-color: rgba(0,0,0,0.05);
-        }
-        .markdown-content code {
-          background-color: rgba(0,0,0,0.1);
-          padding: 2px 6px;
-          border-radius: 4px;
-          font-family: monospace;
-          font-size: 13px;
-        }
-        .markdown-content pre {
-          background-color: rgba(0,0,0,0.1);
-          padding: 12px;
-          border-radius: 6px;
-          overflow-x: auto;
-          margin: 8px 0;
-        }
-        .markdown-content pre code {
-          background: none;
-          padding: 0;
-        }
-        .markdown-content strong { font-weight: 600; }
-        .markdown-content h1, .markdown-content h2, .markdown-content h3 {
-          margin: 12px 0 8px 0;
-          font-weight: 600;
-        }
-        .markdown-content h1 { font-size: 18px; }
-        .markdown-content h2 { font-size: 16px; }
-        .markdown-content h3 { font-size: 15px; }
       `}</style>
 
       <div style={styles.header}>
@@ -399,8 +372,8 @@ export default function AnalysisChat({ analysisId, analysisType, chatModel, chat
                 >
                   {msg.content ? (
                     msg.role === 'assistant' ? (
-                      <div className="markdown-content">
-                        <ReactMarkdown remarkPlugins={[remarkGfm]}>{stripThinkTags(msg.content)}</ReactMarkdown>
+                      <div style={styles.assistantText}>
+                        {sanitizeAssistantPlainText(msg.content)}
                       </div>
                     ) : (
                       msg.content

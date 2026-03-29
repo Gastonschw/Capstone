@@ -33,6 +33,11 @@ TAMU_API_KEY = os.getenv("TAMU_API_KEY")
 TAMU_API_BASE = os.getenv("TAMU_API_BASE", "https://chat-api.tamu.ai/api/v1")
 TAMU_MODELS_URL = os.getenv("TAMU_MODELS_URL", "https://chat-api.tamu.ai/openai/models")
 TAMU_DEFAULT_MODEL = os.getenv("TAMU_MODEL", "protected.Claude Opus 4.5")
+PLAIN_TEXT_OUTPUT_POLICY = """## Output Format Requirements
+- Return plain text only using standard characters and whitespace.
+- Do not use markdown or rich formatting (no headings, bullets, numbered lists, tables, code fences, block quotes, or inline code backticks).
+- Use short paragraphs separated only by normal line breaks.
+"""
 
 
 def resolve_api_key(api_key: Optional[str] = None) -> str:
@@ -205,6 +210,8 @@ async def build_erd_context(
 - When asked about improvements, provide concrete, actionable suggestions
 - You can see the ERD images that were analyzed - reference visual elements when relevant
 - Keep responses concise but thorough
+
+{PLAIN_TEXT_OUTPUT_POLICY}
 """
 
     # Build image content blocks for the ERD images (OpenAI vision format)
@@ -345,6 +352,8 @@ Recommendations: {json.dumps(resistance.get('recommendations', []), indent=2)}
 - When asked about fixes, provide concrete code examples when possible
 - Prioritize the most critical security concerns in your responses
 - Keep responses concise but thorough
+
+{PLAIN_TEXT_OUTPUT_POLICY}
 """
 
     return system_prompt
@@ -625,6 +634,8 @@ async def build_compliance_context(
 - Answer questions about this compliance analysis clearly and helpfully
 - Reference specific findings, scores, and code snippets when relevant
 - Keep responses concise but thorough
+
+{PLAIN_TEXT_OUTPUT_POLICY}
 """
 
 
@@ -680,6 +691,8 @@ async def build_correctness_context(
 - Answer questions about this correctness analysis clearly and helpfully
 - Reference specific findings, scores, and code snippets when relevant
 - Keep responses concise but thorough
+
+{PLAIN_TEXT_OUTPUT_POLICY}
 """
 
 
@@ -740,6 +753,8 @@ async def build_usability_context(
 - Answer questions about this usability analysis clearly and helpfully
 - Reference specific findings, scores, and code snippets when relevant
 - Keep responses concise but thorough
+
+{PLAIN_TEXT_OUTPUT_POLICY}
 """
 
 
@@ -797,6 +812,8 @@ async def build_maintainability_context(
 - Answer questions about this maintainability analysis clearly and helpfully
 - Reference specific findings, scores, and code snippets when relevant
 - Keep responses concise but thorough
+
+{PLAIN_TEXT_OUTPUT_POLICY}
 """
 
 
