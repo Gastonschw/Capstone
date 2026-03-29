@@ -33,10 +33,11 @@ TAMU_API_KEY = os.getenv("TAMU_API_KEY")
 TAMU_API_BASE = os.getenv("TAMU_API_BASE", "https://chat-api.tamu.ai/api/v1")
 TAMU_MODELS_URL = os.getenv("TAMU_MODELS_URL", "https://chat-api.tamu.ai/openai/models")
 TAMU_DEFAULT_MODEL = os.getenv("TAMU_MODEL", "protected.Claude Opus 4.5")
-PLAIN_TEXT_OUTPUT_POLICY = """## Output Format Requirements
-- Return plain text only using standard characters and whitespace.
-- Do not use markdown or rich formatting (no headings, bullets, numbered lists, tables, code fences, block quotes, or inline code backticks).
-- Use short paragraphs separated only by normal line breaks.
+MARKDOWN_OUTPUT_POLICY = """## Output Format Requirements
+- Use markdown for structure and readability.
+- Prefer short headings, bullet points, and numbered lists when useful.
+- Use code fences for code examples and inline code backticks for identifiers/paths.
+- Keep responses concise and scannable.
 """
 
 
@@ -211,7 +212,7 @@ async def build_erd_context(
 - You can see the ERD images that were analyzed - reference visual elements when relevant
 - Keep responses concise but thorough
 
-{PLAIN_TEXT_OUTPUT_POLICY}
+{MARKDOWN_OUTPUT_POLICY}
 """
 
     # Build image content blocks for the ERD images (OpenAI vision format)
@@ -353,7 +354,7 @@ Recommendations: {json.dumps(resistance.get('recommendations', []), indent=2)}
 - Prioritize the most critical security concerns in your responses
 - Keep responses concise but thorough
 
-{PLAIN_TEXT_OUTPUT_POLICY}
+{MARKDOWN_OUTPUT_POLICY}
 """
 
     return system_prompt
@@ -635,7 +636,7 @@ async def build_compliance_context(
 - Reference specific findings, scores, and code snippets when relevant
 - Keep responses concise but thorough
 
-{PLAIN_TEXT_OUTPUT_POLICY}
+{MARKDOWN_OUTPUT_POLICY}
 """
 
 
@@ -692,7 +693,7 @@ async def build_correctness_context(
 - Reference specific findings, scores, and code snippets when relevant
 - Keep responses concise but thorough
 
-{PLAIN_TEXT_OUTPUT_POLICY}
+{MARKDOWN_OUTPUT_POLICY}
 """
 
 
@@ -754,7 +755,7 @@ async def build_usability_context(
 - Reference specific findings, scores, and code snippets when relevant
 - Keep responses concise but thorough
 
-{PLAIN_TEXT_OUTPUT_POLICY}
+{MARKDOWN_OUTPUT_POLICY}
 """
 
 
@@ -813,7 +814,7 @@ async def build_maintainability_context(
 - Reference specific findings, scores, and code snippets when relevant
 - Keep responses concise but thorough
 
-{PLAIN_TEXT_OUTPUT_POLICY}
+{MARKDOWN_OUTPUT_POLICY}
 """
 
 
