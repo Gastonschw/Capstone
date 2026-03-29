@@ -65,6 +65,15 @@ const styles = {
   },
 };
 
+const emptyAnalysisTypes = {
+  erd: false,
+  integrity: false,
+  compliance: false,
+  correctness: false,
+  usability: false,
+  maintainability: false,
+};
+
 const analysisOptions = [
   {
     key: 'erd',
@@ -126,9 +135,9 @@ export default function AnalysisTypeSelector({
   };
 
   const handleToggle = (type) => {
-    onChange({
-      ...analysisTypes,
-      [type]: !analysisTypes[type],
+    onChange((prev) => {
+      const merged = { ...emptyAnalysisTypes, ...prev };
+      return { ...merged, [type]: !merged[type] };
     });
   };
 
@@ -151,7 +160,11 @@ export default function AnalysisTypeSelector({
                 <input
                   type="checkbox"
                   checked={!!analysisTypes[opt.key]}
-                  onChange={() => handleToggle(opt.key)}
+                  onChange={(e) => {
+                    e.stopPropagation();
+                    handleToggle(opt.key);
+                  }}
+                  onClick={(e) => e.stopPropagation()}
                   style={styles.checkbox}
                 />
                 <span style={styles.optionIcon} dangerouslySetInnerHTML={{ __html: opt.icon }} />

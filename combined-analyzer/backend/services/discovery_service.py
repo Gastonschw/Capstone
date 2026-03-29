@@ -1,10 +1,10 @@
 """
 Combined File Discovery Service
 
-Discovers files for both ERD Analysis and Integrity Analysis.
+Discovers files for ERD analysis and code-based analyses (integrity, compliance, etc.).
 Uses AI to identify:
 - ERD images and user story files (for ERD analysis)
-- Code, config, and documentation files (for Integrity analysis)
+- Code, config, and documentation files (for code-based analysis tools)
 
 Uses TAMU API (OpenAI-compatible) so the same API key as chat works for discovery.
 """
@@ -21,6 +21,13 @@ from sqlalchemy import select, delete
 
 from models.repository import Repository, DiscoveredFile, FileType
 from services.chat_service import get_client, TAMU_DEFAULT_MODEL
+
+# Auto-select ERD / user-story rows for ERD analysis when AI confidence is at least this.
+ERD_AUTO_SELECT_MIN_CONFIDENCE = 60
+
+# Auto-select code/config rows for all code-based analyses (integrity, compliance, etc.)
+# when relevance score is at least this (same rule for each tool).
+CODE_CONFIG_AUTO_SELECT_MIN_RELEVANCE = 50
 
 
 # ============== File Type Detection ==============
@@ -442,8 +449,9 @@ async def run_file_discovery(
     """
     Run the complete file discovery workflow and save results to database.
 
-    Discovers files for both ERD and Integrity analysis.
-    Uses TAMU API when api_key is provided (or from env); same key as chat.
+    Discovers files for ERD analysis and for code-based analyses (integrity, compliance,
+    correctness, usability, maintainability). Uses TAMU API when api_key is provided
+    (or from env); same key as chat.
     """
     # Step 1: Scan for all files
     files = scan_repository_files(repo_path)
@@ -466,7 +474,7 @@ async def run_file_discovery(
             file_path=candidate.path,
             file_type=candidate.file_type,
             confidence_score=candidate.confidence,
-            is_selected_erd=candidate.confidence >= 60,
+            is_selected_erd=candidate.confidence >= ERD_AUTO_SELECT_MIN_CONFIDENCE,
             is_selected_integrity=False
         )
         db.add(db_file)
@@ -480,18 +488,19 @@ async def run_file_discovery(
             file_type=candidate.file_type,
             confidence_score=candidate.confidence,
             content_preview=candidate.preview,
-            is_selected_erd=candidate.confidence >= 60,
+            is_selected_erd=candidate.confidence >= ERD_AUTO_SELECT_MIN_CONFIDENCE,
             is_selected_integrity=False
         )
         db.add(db_file)
         saved_files.append(db_file)
 
-    # Save code files (for Integrity analysis)
+    # Save code files (shared pool for all code-based analysis tools)
     for code_file in sorted(files['code_files'], key=lambda x: x['relevance'], reverse=True)[:100]:
         # Skip if relevance is too low
         if code_file['relevance'] < 10:
             continue
 
+        auto_code = code_file['relevance'] >= CODE_CONFIG_AUTO_SELECT_MIN_RELEVANCE
         db_file = DiscoveredFile(
             repository_id=repository_id,
             file_path=code_file['path'],
@@ -500,16 +509,21 @@ async def run_file_discovery(
             relevance_score=code_file['relevance'],
             content_preview=code_file.get('preview'),
             is_selected_erd=False,
-            is_selected_integrity=code_file['relevance'] >= 50
+            is_selected_integrity=auto_code,
+            is_selected_compliance=auto_code,
+            is_selected_correctness=auto_code,
+            is_selected_usability=auto_code,
+            is_selected_maintainability=auto_code,
         )
         db.add(db_file)
         saved_files.append(db_file)
 
-    # Save config files (for Integrity analysis)
+    # Save config files (shared pool for all code-based analysis tools)
     for config_file in sorted(files['config_files'], key=lambda x: x['relevance'], reverse=True)[:20]:
         if config_file['relevance'] < 10:
             continue
 
+        auto_cfg = config_file['relevance'] >= CODE_CONFIG_AUTO_SELECT_MIN_RELEVANCE
         db_file = DiscoveredFile(
             repository_id=repository_id,
             file_path=config_file['path'],
@@ -517,7 +531,11 @@ async def run_file_discovery(
             relevance_score=config_file['relevance'],
             content_preview=config_file.get('preview'),
             is_selected_erd=False,
-            is_selected_integrity=config_file['relevance'] >= 50
+            is_selected_integrity=auto_cfg,
+            is_selected_compliance=auto_cfg,
+            is_selected_correctness=auto_cfg,
+            is_selected_usability=auto_cfg,
+            is_selected_maintainability=auto_cfg,
         )
         db.add(db_file)
         saved_files.append(db_file)
