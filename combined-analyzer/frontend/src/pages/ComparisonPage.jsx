@@ -276,10 +276,13 @@ export default function ComparisonPage() {
   const [repoLoading, setRepoLoading] = useState(true);
   const [error, setError] = useState('');
 
-  const [selectedRepoId, setSelectedRepoId] = useState('');
+  const [baselineRepoId, setBaselineRepoId] = useState('');
+  const [currentRepoId, setCurrentRepoId] = useState('');
   const [analysisType, setAnalysisType] = useState('integrity');
-  const [completedRuns, setCompletedRuns] = useState([]);
-  const [runsLoading, setRunsLoading] = useState(false);
+  const [baselineRuns, setBaselineRuns] = useState([]);
+  const [currentRuns, setCurrentRuns] = useState([]);
+  const [baselineRunsLoading, setBaselineRunsLoading] = useState(false);
+  const [currentRunsLoading, setCurrentRunsLoading] = useState(false);
   const [baselineId, setBaselineId] = useState('');
   const [currentId, setCurrentId] = useState('');
 
@@ -307,42 +310,74 @@ export default function ComparisonPage() {
   }, []);
 
   useEffect(() => {
-    const loadRuns = async () => {
-      if (!selectedRepoId) {
-        setCompletedRuns([]);
+    const loadBaselineRuns = async () => {
+      if (!baselineRepoId) {
+        setBaselineRuns([]);
         setBaselineId('');
-        setCurrentId('');
         return;
       }
-      setRunsLoading(true);
+      setBaselineRunsLoading(true);
       setError('');
       setResult(null);
       try {
-        const raw = await listIsoAnalysesByType(analysisType, selectedRepoId);
+        const raw = await listIsoAnalysesByType(analysisType, baselineRepoId);
         const completed = (Array.isArray(raw) ? raw : []).filter((item) => item?.status === 'completed');
-        setCompletedRuns(completed);
-        if (completed.length >= 2) {
-          setCurrentId(String(completed[0].id));
-          setBaselineId(String(completed[1].id));
-        } else {
-          setCurrentId('');
-          setBaselineId('');
-        }
+        setBaselineRuns(completed);
+        setBaselineId(completed[0] ? String(completed[0].id) : '');
       } catch (err) {
-        setError('Failed to load completed reports for this type.');
-        setCompletedRuns([]);
+        setError('Failed to load baseline reports for this type.');
+        setBaselineRuns([]);
         setBaselineId('');
-        setCurrentId('');
       } finally {
-        setRunsLoading(false);
+        setBaselineRunsLoading(false);
       }
     };
-    loadRuns();
-  }, [selectedRepoId, analysisType]);
+    loadBaselineRuns();
+  }, [baselineRepoId, analysisType]);
+
+  useEffect(() => {
+    const loadCurrentRuns = async () => {
+      if (!currentRepoId) {
+        setCurrentRuns([]);
+        setCurrentId('');
+        return;
+      }
+      setCurrentRunsLoading(true);
+      setError('');
+      setResult(null);
+      try {
+        const raw = await listIsoAnalysesByType(analysisType, currentRepoId);
+        const completed = (Array.isArray(raw) ? raw : []).filter((item) => item?.status === 'completed');
+        setCurrentRuns(completed);
+        setCurrentId(completed[0] ? String(completed[0].id) : '');
+      } catch (err) {
+        setError('Failed to load current reports for this type.');
+        setCurrentRuns([]);
+        setCurrentId('');
+      } finally {
+        setCurrentRunsLoading(false);
+      }
+    };
+    loadCurrentRuns();
+  }, [currentRepoId, analysisType]);
+
+  useEffect(() => {
+    if (!baselineRepoId || !currentRepoId) return;
+    if (baselineRepoId !== currentRepoId) return;
+    if (!baselineId || !currentId) return;
+    if (baselineId !== currentId) return;
+    const alternateCurrent = currentRuns.find((run) => String(run.id) !== baselineId);
+    if (alternateCurrent) {
+      setCurrentId(String(alternateCurrent.id));
+    }
+  }, [baselineRepoId, currentRepoId, baselineId, currentId, currentRuns]);
 
   const canCompare = useMemo(() => {
-    return Boolean(selectedRepoId && baselineId && currentId && baselineId !== currentId && !comparing);
-  }, [selectedRepoId, baselineId, currentId, comparing]);
+    const sameRepo = baselineRepoId && currentRepoId && baselineRepoId === currentRepoId;
+    const sameRunSelection = baselineId && currentId && baselineId === currentId;
+    if (sameRepo && sameRunSelection) return false;
+    return Boolean(baselineRepoId && currentRepoId && baselineId && currentId && !comparing);
+  }, [baselineRepoId, currentRepoId, baselineId, currentId, comparing]);
 
   const handleCompare = async () => {
     if (!canCompare) return;
@@ -433,7 +468,7 @@ export default function ComparisonPage() {
             <div>
               <h1 style={styles.title}>Report Comparison</h1>
               <p style={styles.subtitle}>
-                Select two completed ISO reports and compare findings side-by-side.
+                Select baseline and current repositories, then compare completed ISO reports side-by-side.
               </p>
             </div>
             <button style={styles.backButton} onClick={() => navigate('/analyzer')}>
@@ -443,14 +478,29 @@ export default function ComparisonPage() {
 
           <div style={styles.selectorsGrid}>
             <div style={styles.selectorGroup}>
-              <label style={styles.label}>Repository</label>
+              <label style={styles.label}>Baseline Repository</label>
               <select
                 style={styles.select}
-                value={selectedRepoId}
-                onChange={(e) => setSelectedRepoId(e.target.value)}
+                value={baselineRepoId}
+                onChange={(e) => setBaselineRepoId(e.target.value)}
                 disabled={repoLoading}
               >
-                <option value="">{repoLoading ? 'Loading repositories...' : 'Select repository'}</option>
+                <option value="">{repoLoading ? 'Loading repositories...' : 'Select baseline repository'}</option>
+                {repositories.map((repo) => (
+                  <option key={repo.id} value={repo.id}>{repo.name}</option>
+                ))}
+              </select>
+            </div>
+
+            <div style={styles.selectorGroup}>
+              <label style={styles.label}>Current Repository</label>
+              <select
+                style={styles.select}
+                value={currentRepoId}
+                onChange={(e) => setCurrentRepoId(e.target.value)}
+                disabled={repoLoading}
+              >
+                <option value="">{repoLoading ? 'Loading repositories...' : 'Select current repository'}</option>
                 {repositories.map((repo) => (
                   <option key={repo.id} value={repo.id}>{repo.name}</option>
                 ))}
@@ -476,12 +526,12 @@ export default function ComparisonPage() {
                 style={styles.select}
                 value={baselineId}
                 onChange={(e) => setBaselineId(e.target.value)}
-                disabled={runsLoading || completedRuns.length < 2}
+                disabled={baselineRunsLoading || baselineRuns.length === 0}
               >
                 <option value="">
-                  {runsLoading ? 'Loading reports...' : 'Select older report'}
+                  {baselineRunsLoading ? 'Loading reports...' : 'Select baseline report'}
                 </option>
-                {completedRuns.map((run) => (
+                {baselineRuns.map((run) => (
                   <option key={run.id} value={run.id}>{formatRunLabel(run)}</option>
                 ))}
               </select>
@@ -493,12 +543,12 @@ export default function ComparisonPage() {
                 style={styles.select}
                 value={currentId}
                 onChange={(e) => setCurrentId(e.target.value)}
-                disabled={runsLoading || completedRuns.length < 2}
+                disabled={currentRunsLoading || currentRuns.length === 0}
               >
                 <option value="">
-                  {runsLoading ? 'Loading reports...' : 'Select newer report'}
+                  {currentRunsLoading ? 'Loading reports...' : 'Select current report'}
                 </option>
-                {completedRuns.map((run) => (
+                {currentRuns.map((run) => (
                   <option key={run.id} value={run.id}>{formatRunLabel(run)}</option>
                 ))}
               </select>
@@ -521,8 +571,14 @@ export default function ComparisonPage() {
             </span>
           </div>
 
-          {completedRuns.length > 0 && completedRuns.length < 2 && (
-            <p style={styles.info}>This repository/type needs at least two completed runs to compare.</p>
+          {baselineRepoId && baselineRuns.length === 0 && !baselineRunsLoading && (
+            <p style={styles.info}>Baseline repository has no completed reports for this type.</p>
+          )}
+          {currentRepoId && currentRuns.length === 0 && !currentRunsLoading && (
+            <p style={styles.info}>Current repository has no completed reports for this type.</p>
+          )}
+          {baselineRepoId && currentRepoId && baselineRepoId === currentRepoId && baselineId && currentId && baselineId === currentId && (
+            <p style={styles.info}>When comparing within the same repository, choose two different reports.</p>
           )}
           {lastInfo && <p style={styles.info}>{lastInfo}</p>}
           {error && <div style={styles.error}>{error}</div>}
