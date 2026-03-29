@@ -4,6 +4,7 @@ Chat API routes for discussing analysis results.
 Uses Server-Sent Events (SSE) for streaming responses.
 """
 
+import json
 from typing import List, Optional
 from fastapi import APIRouter, Depends, Header, HTTPException
 from fastapi.responses import StreamingResponse
@@ -38,6 +39,13 @@ class ChatRequest(BaseModel):
     api_key: Optional[str] = None  # User's TAMU API key; takes precedence over header/env
 
 
+def _encode_sse_chunk(chunk: str) -> str:
+    """Encode chunk as JSON so newlines survive SSE line framing."""
+    if not isinstance(chunk, str):
+        chunk = str(chunk)
+    return json.dumps(chunk)
+
+
 async def event_generator(
     stream_func,
     analysis_id: int,
@@ -60,11 +68,11 @@ async def event_generator(
             api_key=api_key,
         ):
             # Format as SSE data
-            yield f"data: {chunk}\n\n"
+            yield f"data: {_encode_sse_chunk(chunk)}\n\n"
         # Send done event
         yield "data: [DONE]\n\n"
     except Exception as e:
-        yield f"data: Error: {str(e)}\n\n"
+        yield f"data: {_encode_sse_chunk(f'Error: {str(e)}')}\n\n"
         yield "data: [DONE]\n\n"
 
 

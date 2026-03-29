@@ -412,6 +412,14 @@ export async function sendChatMessage(
   if (apiKey) headers['X-TAMU-API-Key'] = apiKey;
 
   try {
+    const decodeSseDataChunk = (data) => {
+      try {
+        return JSON.parse(data);
+      } catch {
+        return data;
+      }
+    };
+
     const body = {
       message,
       history: history.map(m => ({ role: m.role, content: m.content })),
@@ -464,7 +472,7 @@ export async function sendChatMessage(
             return;
           }
 
-          onChunk(data);
+          onChunk(decodeSseDataChunk(data));
         }
       }
     }
