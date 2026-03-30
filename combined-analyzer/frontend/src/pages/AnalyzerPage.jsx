@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import Header from '../components/common/Header';
 import Sidebar from '../components/common/Sidebar';
@@ -109,6 +109,7 @@ export default function AnalyzerPage() {
   const [modelsError, setModelsError] = useState('');
   const [authUser, setAuthUser] = useState(null);
   const [authLoading, setAuthLoading] = useState(isSupabaseConfigured);
+  const modelsDebounceIsFirst = useRef(true);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -219,7 +220,9 @@ export default function AnalyzerPage() {
       }
     };
 
-    const timeoutId = setTimeout(loadModels, 300);
+    const delayMs = modelsDebounceIsFirst.current ? 0 : 300;
+    modelsDebounceIsFirst.current = false;
+    const timeoutId = setTimeout(loadModels, delayMs);
     return () => {
       cancelled = true;
       clearTimeout(timeoutId);
