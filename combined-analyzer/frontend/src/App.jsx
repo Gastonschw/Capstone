@@ -7,6 +7,7 @@ import JoinClassPage from './pages/JoinClassPage';
 const ComparisonPage = lazy(() => import('./pages/ComparisonPage'));
 import { setCurrentUserId, listMyClasses } from './api';
 import { supabase, isSupabaseConfigured } from './lib/supabaseClient';
+import AppLoading from './components/common/AppLoading';
 
 const LOGIN_ERROR_MESSAGE = 'Sign-in was cancelled or failed. Please try again.';
 
@@ -150,22 +151,21 @@ export default function App() {
   const gatePending =
     isSupabaseConfigured && authUser && (classGate.status === 'idle' || classGate.status === 'loading');
 
-  if ((authLoading && isSupabaseConfigured) || gatePending) {
+  if (authLoading && isSupabaseConfigured) {
+    return <AppLoading message="Signing you in…" subMessage="Verifying your account." />;
+  }
+
+  if (gatePending) {
     return (
-      <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', backgroundColor: '#f5f7fa' }}>
-        <span style={{ color: '#666' }}>Loading…</span>
-      </div>
+      <AppLoading
+        message="Loading your classes…"
+        subMessage="Checking enrollment and where to send you next."
+      />
     );
   }
 
   return (
-    <Suspense
-      fallback={(
-        <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', backgroundColor: '#f5f7fa' }}>
-          <span style={{ color: '#666' }}>Loading…</span>
-        </div>
-      )}
-    >
+    <Suspense fallback={<AppLoading message="Loading…" subMessage="Opening this page." />}>
       <Routes>
         <Route path="/" element={<LandingPage loginError={loginError} onClearLoginError={() => setLoginError(null)} />} />
         <Route path="/join-class" element={<JoinClassPage />} />

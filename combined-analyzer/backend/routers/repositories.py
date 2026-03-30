@@ -7,8 +7,6 @@ from typing import Dict, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Request, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
-from sqlalchemy.orm import selectinload
-
 from database import get_db
 from dependencies import get_optional_user_id
 from models.repository import Repository, DiscoveredFile
@@ -27,6 +25,7 @@ from schemas.repository import (
 from services.folder_service import delete_repository_files
 from services.discovery_service import run_discovery_only
 from services.user_service import get_user_role
+from services.repository_access import require_repository_access
 
 router = APIRouter(prefix="/api", tags=["repositories"])
 
@@ -120,6 +119,10 @@ async def list_repositories(
             owner_uuid = uuid.UUID(user_id_raw)
         except (ValueError, TypeError):
             pass
+    else:
+        # Unauthenticated listing would expose arbitrary repositories; return none.
+        return []
+
     q = select(Repository).order_by(Repository.created_at.desc())
     if owner_uuid is not None:
         q = q.where(Repository.owner_user_id == owner_uuid)
@@ -156,31 +159,25 @@ async def list_repositories(
 
 
 @router.get("/repository/{repository_id}", response_model=RepositoryResponse)
-async def get_repository(repository_id: int, db: AsyncSession = Depends(get_db)):
+async def get_repository(
+    repository_id: int,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
     """Get a repository with its discovered files."""
-    result = await db.execute(
-        select(Repository)
-        .options(selectinload(Repository.discovered_files))
-        .where(Repository.id == repository_id)
+    return await require_repository_access(
+        request, db, repository_id, with_discovered_files=True
     )
-    repository = result.scalar_one_or_none()
-
-    if not repository:
-        raise HTTPException(status_code=404, detail="Repository not found")
-
-    return repository
 
 
 @router.delete("/repository/{repository_id}")
-async def delete_repository(repository_id: int, db: AsyncSession = Depends(get_db)):
+async def delete_repository(
+    repository_id: int,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
     """Delete a repository and its files."""
-    result = await db.execute(
-        select(Repository).where(Repository.id == repository_id)
-    )
-    repository = result.scalar_one_or_none()
-
-    if not repository:
-        raise HTTPException(status_code=404, detail="Repository not found")
+    repository = await require_repository_access(request, db, repository_id)
 
     # Delete local files
     delete_repository_files(repository.local_path)
@@ -196,16 +193,11 @@ async def delete_repository(repository_id: int, db: AsyncSession = Depends(get_d
 async def update_file_selection(
     repository_id: int,
     update: FileSelectionUpdate,
-    db: AsyncSession = Depends(get_db)
+    request: Request,
+    db: AsyncSession = Depends(get_db),
 ):
     """Update file selection for a specific analysis type."""
-    # Verify repository exists
-    result = await db.execute(
-        select(Repository).where(Repository.id == repository_id)
-    )
-    repository = result.scalar_one_or_none()
-    if not repository:
-        raise HTTPException(status_code=404, detail="Repository not found")
+    await require_repository_access(request, db, repository_id)
 
     # Update file selections
     result = await db.execute(
@@ -244,16 +236,11 @@ async def update_file_selection(
 async def rediscover_files(
     repository_id: int,
     background_tasks: BackgroundTasks,
-    db: AsyncSession = Depends(get_db)
+    request: Request,
+    db: AsyncSession = Depends(get_db),
 ):
     """Re-run file discovery for a repository."""
-    result = await db.execute(
-        select(Repository).where(Repository.id == repository_id)
-    )
-    repository = result.scalar_one_or_none()
-
-    if not repository:
-        raise HTTPException(status_code=404, detail="Repository not found")
+    repository = await require_repository_access(request, db, repository_id)
 
     # Run discovery in background
     discovery_result = await run_discovery_only(repository, db)

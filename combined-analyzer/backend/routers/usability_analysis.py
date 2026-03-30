@@ -5,7 +5,7 @@ Usability Analysis API routes.
 import json
 from typing import List, Optional
 from datetime import datetime
-from fastapi import APIRouter, Body, Depends, Header, HTTPException, BackgroundTasks
+from fastapi import APIRouter, Body, Depends, Header, HTTPException, BackgroundTasks, Request
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -15,6 +15,7 @@ from models.repository import Repository
 from models.usability_analysis import UsabilityAnalysis
 from schemas.usability_analysis import UsabilityAnalysisResponse, UsabilityAnalysisListItem
 from services.usability_analysis_service import run_usability_analysis
+from services.repository_access import require_analysis_access, require_repository_access
 from concurrency import analysis_semaphore
 
 router = APIRouter(prefix="/api/usability", tags=["usability-analysis"])
@@ -113,18 +114,13 @@ def _get_api_key(body, header_key):
 async def start_usability_analysis(
     repository_id: int,
     background_tasks: BackgroundTasks,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     body: Optional[StartUsabilityAnalysisRequest] = Body(None),
     tamu_api_key: Optional[str] = Header(default=None, alias="X-TAMU-API-Key"),
 ):
     """Start a Usability analysis for a repository."""
-    result = await db.execute(
-        select(Repository).where(Repository.id == repository_id)
-    )
-    repository = result.scalar_one_or_none()
-
-    if not repository:
-        raise HTTPException(status_code=404, detail="Repository not found")
+    await require_repository_access(request, db, repository_id)
 
     api_key = _get_api_key(body, tamu_api_key)
     model = (body.model and body.model.strip()) if body else None
@@ -150,7 +146,12 @@ async def start_usability_analysis(
 
 
 @router.get("/repository/{repository_id}/analyses", response_model=List[UsabilityAnalysisListItem])
-async def list_usability_analyses(repository_id: int, db: AsyncSession = Depends(get_db)):
+async def list_usability_analyses(
+    repository_id: int,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    await require_repository_access(request, db, repository_id)
     result = await db.execute(
         select(UsabilityAnalysis)
         .where(UsabilityAnalysis.repository_id == repository_id)
@@ -167,14 +168,12 @@ async def list_usability_analyses(repository_id: int, db: AsyncSession = Depends
 
 
 @router.get("/analysis/{analysis_id}", response_model=UsabilityAnalysisResponse)
-async def get_usability_analysis(analysis_id: int, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(
-        select(UsabilityAnalysis).where(UsabilityAnalysis.id == analysis_id)
-    )
-    analysis = result.scalar_one_or_none()
-
-    if not analysis:
-        raise HTTPException(status_code=404, detail="Analysis not found")
+async def get_usability_analysis(
+    analysis_id: int,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    analysis = await require_analysis_access(request, db, analysis_id, UsabilityAnalysis)
 
     return UsabilityAnalysisResponse(
         id=analysis.id,

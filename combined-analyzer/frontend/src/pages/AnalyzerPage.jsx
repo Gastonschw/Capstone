@@ -97,6 +97,7 @@ export default function AnalyzerPage() {
   }, [searchParams]);
 
   const [repositories, setRepositories] = useState([]);
+  const [repositoriesLoading, setRepositoriesLoading] = useState(true);
   const [selectedRepo, setSelectedRepo] = useState(null);
   const [view, setView] = useState('upload');
   const [analysisMap, setAnalysisMap] = useState({});
@@ -125,6 +126,7 @@ export default function AnalyzerPage() {
   useEffect(() => {
     let cancelled = false;
     (async () => {
+      setRepositoriesLoading(true);
       try {
         if (!inspectCtx) {
           const repos = await listRepositories();
@@ -145,6 +147,8 @@ export default function AnalyzerPage() {
         setView(list.length > 0 ? 'browser' : 'upload');
       } catch (err) {
         if (!cancelled) console.error('Failed to load repositories:', err);
+      } finally {
+        if (!cancelled) setRepositoriesLoading(false);
       }
     })();
     return () => {
@@ -230,6 +234,7 @@ export default function AnalyzerPage() {
   }, [chatApiKey]);
 
   const loadRepositories = async () => {
+    setRepositoriesLoading(true);
     try {
       const repos = inspectCtx
         ? await listRepositories({ classId: inspectCtx.classId, studentUserId: inspectCtx.studentId })
@@ -237,6 +242,8 @@ export default function AnalyzerPage() {
       setRepositories(Array.isArray(repos) ? repos : []);
     } catch (err) {
       console.error('Failed to load repositories:', err);
+    } finally {
+      setRepositoriesLoading(false);
     }
   };
 
@@ -289,7 +296,7 @@ export default function AnalyzerPage() {
               <UploadForm onRepositoryCreated={handleRepositoryCreated} tamuApiKey={chatApiKey} />
             )}
             <ClassesPanel />
-            {repositories.length === 0 && (
+            {!repositoriesLoading && repositories.length === 0 && (
               <div style={styles.welcome}>
                 <h2 style={styles.welcomeTitle}>
                   {inspectCtx ? "This student has no repositories yet" : 'Welcome to Combined Analyzer'}
@@ -391,6 +398,7 @@ export default function AnalyzerPage() {
       <div style={styles.main}>
         <Sidebar
           repositories={repositories}
+          repositoriesLoading={repositoriesLoading}
           selectedRepo={selectedRepo}
           onRepositorySelect={handleRepositorySelect}
           onOpenComparison={() => navigate('/compare')}

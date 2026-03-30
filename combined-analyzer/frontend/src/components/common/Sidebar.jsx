@@ -109,6 +109,21 @@ const styles = {
     fontSize: '40px',
     marginBottom: '12px',
   },
+  loadingSpinner: {
+    width: '36px',
+    height: '36px',
+    margin: '0 auto 12px',
+    border: '3px solid #e5e7eb',
+    borderTopColor: '#1e3a5f',
+    borderRadius: '50%',
+    animation: 'sidebar-repo-spin 0.75s linear infinite',
+  },
+  loadingTitle: {
+    margin: 0,
+    fontWeight: '600',
+    color: '#333',
+    fontSize: '15px',
+  },
   analysisBadges: {
     display: 'flex',
     gap: '6px',
@@ -170,6 +185,7 @@ const inspectBanner = {
 
 export default function Sidebar({
   repositories,
+  repositoriesLoading = false,
   selectedRepo,
   onRepositorySelect,
   onNewAnalysis,
@@ -213,7 +229,16 @@ export default function Sidebar({
       ) : null}
 
       <div style={styles.repoList}>
-        {repositories.length === 0 ? (
+        {repositoriesLoading && repositories.length === 0 ? (
+          <div style={styles.emptyState}>
+            <style>{`@keyframes sidebar-repo-spin { to { transform: rotate(360deg); } }`}</style>
+            <div style={styles.loadingSpinner} role="status" aria-busy="true" aria-label="Loading repositories" />
+            <p style={styles.loadingTitle}>Loading repositories…</p>
+            <p style={{ fontSize: '12px', marginTop: '8px', color: '#666', lineHeight: 1.5 }}>
+              Fetching your uploads and linked sources
+            </p>
+          </div>
+        ) : repositories.length === 0 ? (
           <div style={styles.emptyState}>
             <div style={styles.emptyIcon}>&#128193;</div>
             <p>No repositories yet</p>

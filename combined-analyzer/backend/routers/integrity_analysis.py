@@ -6,7 +6,7 @@ import json
 from typing import List, Optional
 from datetime import datetime
 from dataclasses import asdict
-from fastapi import APIRouter, Body, Depends, Header, HTTPException, BackgroundTasks
+from fastapi import APIRouter, Body, Depends, Header, HTTPException, BackgroundTasks, Request
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -16,6 +16,7 @@ from models.repository import Repository
 from models.integrity_analysis import IntegrityAnalysis
 from schemas.integrity_analysis import IntegrityAnalysisResponse, IntegrityAnalysisListItem
 from services.integrity_analysis_service import run_integrity_analysis
+from services.repository_access import require_analysis_access, require_repository_access
 from concurrency import analysis_semaphore
 
 router = APIRouter(prefix="/api/integrity", tags=["integrity-analysis"])
@@ -123,19 +124,13 @@ def _get_tamu_api_key(body: Optional[StartIntegrityAnalysisRequest], header_key:
 async def start_integrity_analysis(
     repository_id: int,
     background_tasks: BackgroundTasks,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     body: Optional[StartIntegrityAnalysisRequest] = Body(None),
     tamu_api_key: Optional[str] = Header(default=None, alias="X-TAMU-API-Key"),
 ):
     """Start an Integrity analysis for a repository. Uses TAMU API key from body or header."""
-    # Verify repository exists
-    result = await db.execute(
-        select(Repository).where(Repository.id == repository_id)
-    )
-    repository = result.scalar_one_or_none()
-
-    if not repository:
-        raise HTTPException(status_code=404, detail="Repository not found")
+    await require_repository_access(request, db, repository_id)
 
     api_key = _get_tamu_api_key(body, tamu_api_key)
     model = (body.model and body.model.strip()) if body else None
@@ -176,9 +171,11 @@ async def start_integrity_analysis(
 @router.get("/repository/{repository_id}/analyses", response_model=List[IntegrityAnalysisListItem])
 async def list_integrity_analyses(
     repository_id: int,
-    db: AsyncSession = Depends(get_db)
+    request: Request,
+    db: AsyncSession = Depends(get_db),
 ):
     """List all Integrity analyses for a repository."""
+    await require_repository_access(request, db, repository_id)
     result = await db.execute(
         select(IntegrityAnalysis)
         .where(IntegrityAnalysis.repository_id == repository_id)
@@ -202,16 +199,11 @@ async def list_integrity_analyses(
 @router.get("/analysis/{analysis_id}", response_model=IntegrityAnalysisResponse)
 async def get_integrity_analysis(
     analysis_id: int,
-    db: AsyncSession = Depends(get_db)
+    request: Request,
+    db: AsyncSession = Depends(get_db),
 ):
     """Get a specific Integrity analysis."""
-    result = await db.execute(
-        select(IntegrityAnalysis).where(IntegrityAnalysis.id == analysis_id)
-    )
-    analysis = result.scalar_one_or_none()
-
-    if not analysis:
-        raise HTTPException(status_code=404, detail="Analysis not found")
+    analysis = await require_analysis_access(request, db, analysis_id, IntegrityAnalysis)
 
     return IntegrityAnalysisResponse(
         id=analysis.id,
