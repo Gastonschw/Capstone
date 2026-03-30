@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Header from '../components/common/Header';
 import Sidebar from '../components/common/Sidebar';
+import ChecklistSidebar from '../components/common/ChecklistSidebar';
 import UploadForm from '../components/upload/UploadForm';
 import RepositoryBrowser from '../components/repository/RepositoryBrowser';
 import ERDReportView from '../components/erd/ERDReportView';
@@ -347,6 +348,10 @@ export default function AnalyzerPage() {
           {renderContent()}
         </main>
       </div>
+      <ChecklistSidebar
+        userId={authUser?.id ?? null}
+        supabaseConfigured={isSupabaseConfigured}
+      />
     </div>
   );
 }
