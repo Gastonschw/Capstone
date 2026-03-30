@@ -1,5 +1,13 @@
 import React, { useEffect, useState } from 'react';
-import { listMyClasses, createClass, joinClassByCode, deleteClass } from '../../api';
+import { useNavigate } from 'react-router-dom';
+import {
+  listMyClasses,
+  createClass,
+  deleteClass,
+  listClassMembers,
+  removeClassMember,
+  rotateClassJoinCode,
+} from '../../api';
 
 const styles = {
   container: {
@@ -31,7 +39,7 @@ const styles = {
   },
   content: {
     display: 'grid',
-    gridTemplateColumns: 'minmax(0, 1.4fr) minmax(0, 1fr)',
+    gridTemplateColumns: 'minmax(0, 1fr)',
     gap: '20px',
   },
   column: {},
@@ -241,7 +249,80 @@ const styles = {
     backgroundColor: '#b91c1c',
     color: '#fff',
   },
+  modalButtonPrimary: {
+    backgroundColor: '#1e3a5f',
+    color: '#fff',
+  },
+  rosterBlock: {
+    marginTop: '12px',
+    paddingTop: '12px',
+    borderTop: '1px dashed #e5e7eb',
+  },
+  rosterToggle: {
+    padding: '6px 10px',
+    borderRadius: '8px',
+    border: '1px solid #d1d5db',
+    backgroundColor: '#fff',
+    fontSize: '12px',
+    fontWeight: 500,
+    cursor: 'pointer',
+    color: '#1e3a5f',
+  },
+  memberRow: {
+    display: 'flex',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    gap: '8px',
+    padding: '8px 0',
+    borderBottom: '1px solid #f3f4f6',
+    fontSize: '13px',
+  },
+  memberMain: {
+    flex: '1 1 160px',
+    minWidth: 0,
+  },
+  smallBtn: {
+    padding: '4px 8px',
+    borderRadius: '6px',
+    border: '1px solid #d1d5db',
+    backgroundColor: '#fff',
+    fontSize: '11px',
+    cursor: 'pointer',
+  },
+  smallBtnDanger: {
+    borderColor: '#fecaca',
+    color: '#b91c1c',
+  },
+  rosterSearchWrap: {
+    marginBottom: '10px',
+  },
+  rosterSearchLabel: {
+    display: 'block',
+    fontSize: '11px',
+    fontWeight: 600,
+    color: '#6b7280',
+    marginBottom: '4px',
+    textTransform: 'uppercase',
+    letterSpacing: '0.04em',
+  },
+  rosterSearchInput: {
+    width: '100%',
+    boxSizing: 'border-box',
+    padding: '8px 10px',
+    borderRadius: '8px',
+    border: '1px solid #d1d5db',
+    fontSize: '13px',
+  },
 };
+
+function filterRosterMembers(members, query) {
+  const q = (query || '').trim().toLowerCase();
+  if (!q) return members;
+  return members.filter((m) => {
+    const blob = [m.full_name, m.email, m.user_id].filter(Boolean).join(' ').toLowerCase();
+    return blob.includes(q);
+  });
+}
 
 function Toast({ message, type, onClose }) {
   if (!message) return null;
@@ -263,6 +344,87 @@ function Toast({ message, type, onClose }) {
         <button type="button" style={styles.toastCloseButton} onClick={onClose} aria-label="Close message">
           ×
         </button>
+      </div>
+    </div>
+  );
+}
+
+function RotateJoinCodeModal({ classToRotate, onCancel, onConfirm, loading }) {
+  if (!classToRotate) return null;
+
+  return (
+    <div style={styles.modalBackdrop} role="dialog" aria-modal="true" aria-labelledby="rotate-code-title">
+      <div style={styles.modal}>
+        <h3 id="rotate-code-title" style={styles.modalTitle}>
+          Generate a new join code?
+        </h3>
+        <p style={styles.modalBody}>
+          For <span style={styles.modalHighlight}>{classToRotate.name}</span>, the current code{' '}
+          {classToRotate.join_code ? (
+            <>
+              (<span style={styles.modalHighlight}>{classToRotate.join_code}</span>){' '}
+            </>
+          ) : null}
+          will stop working for new sign-ups. Students already in the class stay enrolled; share the new code only with
+          people who still need to join.
+        </p>
+        <div style={styles.modalActions}>
+          <button
+            type="button"
+            style={{ ...styles.modalButton, ...styles.modalButtonSecondary }}
+            onClick={onCancel}
+            disabled={loading}
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            style={{ ...styles.modalButton, ...styles.modalButtonPrimary }}
+            onClick={onConfirm}
+            disabled={loading}
+          >
+            {loading ? 'Generating…' : 'New join code'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function RemoveMemberModal({ pending, onCancel, onConfirm, loading }) {
+  if (!pending) return null;
+
+  const { className, member } = pending;
+  const studentLabel = member.full_name || member.email || member.user_id;
+
+  return (
+    <div style={styles.modalBackdrop} role="dialog" aria-modal="true" aria-labelledby="remove-member-title">
+      <div style={styles.modal}>
+        <h3 id="remove-member-title" style={styles.modalTitle}>
+          Remove student from class?
+        </h3>
+        <p style={styles.modalBody}>
+          Remove <span style={styles.modalHighlight}>{studentLabel}</span> from{' '}
+          <span style={styles.modalHighlight}>{className}</span>? They will need the join code again to re-enroll.
+        </p>
+        <div style={styles.modalActions}>
+          <button
+            type="button"
+            style={{ ...styles.modalButton, ...styles.modalButtonSecondary }}
+            onClick={onCancel}
+            disabled={loading}
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            style={{ ...styles.modalButton, ...styles.modalButtonDanger }}
+            onClick={onConfirm}
+            disabled={loading}
+          >
+            {loading ? 'Removing…' : 'Remove student'}
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -306,6 +468,7 @@ function DeleteClassModal({ classToDelete, onCancel, onConfirm, loading }) {
 }
 
 export default function ClassesPanel() {
+  const navigate = useNavigate();
   const [loading, setLoading] = useState(true);
   const [role, setRole] = useState('general');
   const [teaching, setTeaching] = useState([]);
@@ -313,13 +476,20 @@ export default function ClassesPanel() {
 
   const [newClassName, setNewClassName] = useState('');
   const [newClassDescription, setNewClassDescription] = useState('');
-  const [joinCode, setJoinCode] = useState('');
+  const [expandedClassId, setExpandedClassId] = useState(null);
+  const [rosterByClass, setRosterByClass] = useState({});
+  const [rosterLoading, setRosterLoading] = useState({});
+  const [rosterSearchByClass, setRosterSearchByClass] = useState({});
 
   const [statusMessage, setStatusMessage] = useState('');
   const [statusType, setStatusType] = useState(''); // 'error' | 'success'
   const [copiedClassId, setCopiedClassId] = useState(null);
   const [classToDelete, setClassToDelete] = useState(null);
   const [deleteLoading, setDeleteLoading] = useState(false);
+  const [memberRemovePending, setMemberRemovePending] = useState(null);
+  const [removeMemberLoading, setRemoveMemberLoading] = useState(false);
+  const [joinCodeRotateClass, setJoinCodeRotateClass] = useState(null);
+  const [joinCodeRotateLoading, setJoinCodeRotateLoading] = useState(false);
 
   useEffect(() => {
     if (!statusMessage) return;
@@ -395,26 +565,36 @@ export default function ClassesPanel() {
     }
   };
 
-  const handleJoinClass = async (e) => {
-    e.preventDefault();
-    if (!joinCode.trim()) return;
-    setStatusMessage('');
-    setStatusType('');
+  const ensureRosterLoaded = async (classId) => {
+    if (rosterByClass[classId]) return;
+    setRosterLoading((m) => ({ ...m, [classId]: true }));
     try {
-      const joined = await joinClassByCode(joinCode.trim());
-      setEnrolled((prev) => {
-        if (prev.some((c) => c.id === joined.id)) return prev;
-        return [joined, ...prev];
-      });
-      setJoinCode('');
-      showStatus(`Joined class: ${joined.name}`, 'success');
+      const data = await listClassMembers(classId);
+      setRosterByClass((prev) => ({ ...prev, [classId]: data.members || [] }));
     } catch (err) {
-      console.error('Join class failed', err);
-      const msg =
-        err?.response?.data?.detail ||
-        (err?.response?.status === 404 ? 'No class found for that code.' : 'Failed to join class.');
-      showStatus(msg, 'error');
+      console.error('Load roster failed', err);
+      showStatus(err?.response?.data?.detail || 'Could not load class roster.', 'error');
+    } finally {
+      setRosterLoading((m) => ({ ...m, [classId]: false }));
     }
+  };
+
+  const toggleRoster = async (classId) => {
+    if (expandedClassId === classId) {
+      setExpandedClassId(null);
+      setRosterSearchByClass((prev) => {
+        const next = { ...prev };
+        delete next[classId];
+        return next;
+      });
+      return;
+    }
+    setExpandedClassId(classId);
+    await ensureRosterLoaded(classId);
+  };
+
+  const openRemoveMemberModal = (classId, className, member) => {
+    setMemberRemovePending({ classId, className, member });
   };
 
   const roleLabel = role === 'admin' ? 'Admin (Teacher)' : 'General User (Student)';
@@ -433,7 +613,7 @@ export default function ClassesPanel() {
       <div style={styles.content}>
         {role === 'admin' && (
           <div style={styles.column}>
-          <div style={styles.columnTitle}>Create a Class</div>
+          <div style={styles.columnTitle}>Create a class</div>
           <p style={styles.helperText}>
             Teachers (admins) can create classes and share the 6-digit join code with students.
           </p>
@@ -509,13 +689,90 @@ export default function ClassesPanel() {
                       )}
                       <button
                         type="button"
+                        style={styles.copyButton}
+                        onClick={() => setJoinCodeRotateClass(cls)}
+                      >
+                        New join code
+                      </button>
+                      <button
+                        type="button"
                         style={{ ...styles.copyButton, color: '#b91c1c' }}
                         onClick={() => setClassToDelete(cls)}
                       >
                         Delete class
                       </button>
+                      <button type="button" style={styles.rosterToggle} onClick={() => toggleRoster(cls.id)}>
+                        {expandedClassId === cls.id ? 'Hide roster' : 'Roster'}
+                      </button>
                     </div>
                   </div>
+                  {expandedClassId === cls.id ? (
+                    <div style={styles.rosterBlock}>
+                      {rosterLoading[cls.id] ? (
+                        <p style={styles.helperText}>Loading roster…</p>
+                      ) : (() => {
+                          const allMembers = rosterByClass[cls.id] || [];
+                          const searchText = rosterSearchByClass[cls.id] || '';
+                          const filteredMembers = filterRosterMembers(allMembers, searchText);
+                          if (allMembers.length === 0) {
+                            return <p style={styles.helperText}>No students have joined this class yet.</p>;
+                          }
+                          return (
+                            <>
+                              <div style={styles.rosterSearchWrap}>
+                                <label htmlFor={`roster-search-${cls.id}`} style={styles.rosterSearchLabel}>
+                                  Search roster
+                                </label>
+                                <input
+                                  id={`roster-search-${cls.id}`}
+                                  type="search"
+                                  placeholder="Name, email, or user id"
+                                  value={searchText}
+                                  onChange={(e) =>
+                                    setRosterSearchByClass((prev) => ({ ...prev, [cls.id]: e.target.value }))
+                                  }
+                                  style={styles.rosterSearchInput}
+                                  autoComplete="off"
+                                />
+                              </div>
+                              {filteredMembers.length === 0 ? (
+                                <p style={styles.helperText}>No students match that search.</p>
+                              ) : (
+                                filteredMembers.map((m) => (
+                                  <div key={m.user_id} style={styles.memberRow}>
+                                    <div style={styles.memberMain}>
+                                      <strong>{m.full_name || m.email || m.user_id}</strong>
+                                      {m.email && m.full_name ? (
+                                        <div style={styles.classMeta}>{m.email}</div>
+                                      ) : null}
+                                    </div>
+                                    <button
+                                      type="button"
+                                      style={styles.smallBtn}
+                                      onClick={() => {
+                                        const label = encodeURIComponent(m.full_name || m.email || 'Student');
+                                        navigate(
+                                          `/analyzer?inspectClass=${encodeURIComponent(cls.id)}&inspectStudent=${encodeURIComponent(m.user_id)}&inspectName=${label}`
+                                        );
+                                      }}
+                                    >
+                                      View recent runs
+                                    </button>
+                                    <button
+                                      type="button"
+                                      style={{ ...styles.smallBtn, ...styles.smallBtnDanger }}
+                                      onClick={() => openRemoveMemberModal(cls.id, cls.name, m)}
+                                    >
+                                      Remove
+                                    </button>
+                                  </div>
+                                ))
+                              )}
+                            </>
+                          );
+                        })()}
+                    </div>
+                  ) : null}
                 </div>
               ))
             )}
@@ -525,33 +782,13 @@ export default function ClassesPanel() {
 
         {role !== 'admin' && (
           <div style={styles.column}>
-            <div style={styles.columnTitle}>Join a Class</div>
-            <p style={styles.helperText}>
-              Enter the 6-digit code provided by your instructor to join their class.
-            </p>
-            <form onSubmit={handleJoinClass}>
-              <div style={styles.formGroup}>
-                <input
-                  type="text"
-                  placeholder="6-digit code"
-                  value={joinCode}
-                  onChange={(e) => setJoinCode(e.target.value)}
-                  style={styles.input}
-                />
-                <button type="submit" style={{ ...styles.button, ...styles.buttonSecondary }}>
-                  Join
-                </button>
-              </div>
-            </form>
-
             <div style={styles.list}>
+              <div style={styles.listHeader}>My enrolled classes</div>
               {enrolled.length === 0 ? (
-                <>
-                  <div style={styles.listHeader}>My Enrolled Classes</div>
-                  <p style={styles.helperText}>
-                    You have not joined any classes yet. Once you join with a code, they will be listed here.
-                  </p>
-                </>
+                <p style={styles.helperText}>
+                  You are not enrolled in any class yet. Enter the join code from your instructor on the class code
+                  page after sign-in.
+                </p>
               ) : (
                 enrolled.map((cls) => (
                   <div key={cls.id} style={styles.classItem}>
@@ -565,6 +802,58 @@ export default function ClassesPanel() {
         )}
       </div>
 
+      <RotateJoinCodeModal
+        classToRotate={joinCodeRotateClass}
+        loading={joinCodeRotateLoading}
+        onCancel={() => {
+          if (joinCodeRotateLoading) return;
+          setJoinCodeRotateClass(null);
+        }}
+        onConfirm={async () => {
+          if (!joinCodeRotateClass) return;
+          try {
+            setJoinCodeRotateLoading(true);
+            const updated = await rotateClassJoinCode(joinCodeRotateClass.id);
+            setTeaching((prev) =>
+              prev.map((c) => (c.id === updated.id ? { ...c, join_code: updated.join_code } : c))
+            );
+            showStatus(`New join code: ${updated.join_code}`, 'success');
+          } catch (err) {
+            console.error('Rotate join code failed', err);
+            showStatus(err?.response?.data?.detail || 'Could not generate a new join code.', 'error');
+          } finally {
+            setJoinCodeRotateLoading(false);
+            setJoinCodeRotateClass(null);
+          }
+        }}
+      />
+      <RemoveMemberModal
+        pending={memberRemovePending}
+        loading={removeMemberLoading}
+        onCancel={() => {
+          if (removeMemberLoading) return;
+          setMemberRemovePending(null);
+        }}
+        onConfirm={async () => {
+          if (!memberRemovePending) return;
+          const { classId, member } = memberRemovePending;
+          try {
+            setRemoveMemberLoading(true);
+            await removeClassMember(classId, member.user_id);
+            setRosterByClass((prev) => ({
+              ...prev,
+              [classId]: (prev[classId] || []).filter((x) => x.user_id !== member.user_id),
+            }));
+            showStatus('Student removed from class.', 'success');
+          } catch (err) {
+            console.error('Remove member failed', err);
+            showStatus(err?.response?.data?.detail || 'Could not remove student.', 'error');
+          } finally {
+            setRemoveMemberLoading(false);
+            setMemberRemovePending(null);
+          }
+        }}
+      />
       <DeleteClassModal
         classToDelete={classToDelete}
         loading={deleteLoading}

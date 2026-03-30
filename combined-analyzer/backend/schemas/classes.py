@@ -25,3 +25,16 @@ class MyClassesResponse(BaseModel):
     teaching: List[ClassSummary] = []
     enrolled: List[ClassSummary] = []
 
+
+class ClassMemberItem(BaseModel):
+    """A student enrolled in a class (roster row)."""
+
+    user_id: str
+    email: Optional[str] = None
+    full_name: Optional[str] = None
+    joined_at: Optional[datetime] = None
+
+
+class ClassMembersResponse(BaseModel):
+    members: List[ClassMemberItem] = []
+

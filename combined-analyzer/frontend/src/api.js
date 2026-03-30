@@ -52,8 +52,15 @@ api.interceptors.request.use((config) => {
 
 // ============== Repository Management ==============
 
-export async function listRepositories() {
-  const response = await api.get('/repositories');
+export async function listRepositories(opts = {}) {
+  const config = {};
+  if (opts.classId && opts.studentUserId) {
+    config.params = {
+      class_id: opts.classId,
+      student_user_id: opts.studentUserId,
+    };
+  }
+  const response = await api.get('/repositories', config);
   return response.data;
 }
 
@@ -387,6 +394,20 @@ export async function listMyClasses() {
 export async function deleteClass(classId) {
   const response = await api.delete(`/classes/${classId}`);
   return response.data;
+}
+
+export async function rotateClassJoinCode(classId) {
+  const response = await api.post(`/classes/${classId}/rotate-join-code`);
+  return response.data;
+}
+
+export async function listClassMembers(classId) {
+  const response = await api.get(`/classes/${classId}/members`);
+  return response.data;
+}
+
+export async function removeClassMember(classId, userId) {
+  await api.delete(`/classes/${classId}/members/${userId}`);
 }
 
 export async function sendChatMessage(

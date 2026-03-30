@@ -11,13 +11,13 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 from pydantic import BaseModel
 
 from database import get_db
 from models import Class, ClassMember
-from schemas import ClassSummary, MyClassesResponse
+from schemas import ClassSummary, MyClassesResponse, ClassMemberItem, ClassMembersResponse
 from services.user_service import get_user_role
 from dependencies import get_optional_user_id
 
@@ -189,6 +189,137 @@ async def list_my_classes(
     ]
 
     return MyClassesResponse(role=role, teaching=teaching, enrolled=enrolled)
+
+
+@router.get("/{class_id}/members", response_model=ClassMembersResponse)
+async def list_class_members(
+    request: Request,
+    class_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """List students in a class. Only the class owner (admin teacher) may call this."""
+    user_id = _require_current_user_id(request)
+    role = await get_user_role(db, user_id)
+    if role != "admin":
+        raise HTTPException(status_code=403, detail="Only admin users can view class rosters")
+
+    try:
+        class_uuid = uuid.UUID(class_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid class id")
+
+    result = await db.execute(select(Class).where(Class.id == class_uuid))
+    class_obj = result.scalar_one_or_none()
+    if not class_obj:
+        raise HTTPException(status_code=404, detail="Class not found")
+    if class_obj.owner_user_id != user_id:
+        raise HTTPException(status_code=403, detail="You do not have permission to view this class roster")
+
+    rows = await db.execute(
+        text(
+            """
+            select cm.user_id::text as user_id, u.email, u.full_name, cm.created_at as joined_at
+            from class_members cm
+            join public.users u on u.id = cm.user_id
+            where cm.class_id = :cid
+            order by cm.created_at asc
+            """
+        ),
+        {"cid": str(class_uuid)},
+    )
+    members = [
+        ClassMemberItem(
+            user_id=r[0],
+            email=r[1],
+            full_name=r[2],
+            joined_at=r[3],
+        )
+        for r in rows.fetchall()
+    ]
+    return ClassMembersResponse(members=members)
+
+
+@router.delete("/{class_id}/members/{member_user_id}", status_code=204)
+async def remove_class_member(
+    request: Request,
+    class_id: str,
+    member_user_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """Remove a student from a class. Only the class owner may call this."""
+    owner_id = _require_current_user_id(request)
+    role = await get_user_role(db, owner_id)
+    if role != "admin":
+        raise HTTPException(status_code=403, detail="Only admin users can remove class members")
+
+    try:
+        class_uuid = uuid.UUID(class_id)
+        member_uuid = uuid.UUID(member_user_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid class or user id")
+
+    if member_uuid == owner_id:
+        raise HTTPException(status_code=400, detail="Cannot remove the class owner from the roster this way")
+
+    result = await db.execute(select(Class).where(Class.id == class_uuid))
+    class_obj = result.scalar_one_or_none()
+    if not class_obj:
+        raise HTTPException(status_code=404, detail="Class not found")
+    if class_obj.owner_user_id != owner_id:
+        raise HTTPException(status_code=403, detail="You do not have permission to modify this class roster")
+
+    mem_result = await db.execute(
+        select(ClassMember).where(
+            ClassMember.class_id == class_uuid,
+            ClassMember.user_id == member_uuid,
+        )
+    )
+    member_row = mem_result.scalar_one_or_none()
+    if not member_row:
+        raise HTTPException(status_code=404, detail="Member not found in this class")
+
+    await db.delete(member_row)
+    await db.commit()
+
+    return Response(status_code=204)
+
+
+@router.post("/{class_id}/rotate-join-code", response_model=ClassSummary)
+async def rotate_join_code(
+    request: Request,
+    class_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """Replace the class join code with a new unique code. Owner only; existing members stay enrolled."""
+    user_id = _require_current_user_id(request)
+    role = await get_user_role(db, user_id)
+    if role != "admin":
+        raise HTTPException(status_code=403, detail="Only admin users can change join codes")
+
+    try:
+        class_uuid = uuid.UUID(class_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid class id")
+
+    result = await db.execute(select(Class).where(Class.id == class_uuid))
+    class_obj = result.scalar_one_or_none()
+    if not class_obj:
+        raise HTTPException(status_code=404, detail="Class not found")
+    if class_obj.owner_user_id != user_id:
+        raise HTTPException(status_code=403, detail="You do not have permission to change this class join code")
+
+    new_code = await _ensure_unique_join_code(db)
+    class_obj.join_code = new_code
+    await db.commit()
+    await db.refresh(class_obj)
+
+    return ClassSummary(
+        id=str(class_obj.id),
+        name=class_obj.name,
+        description=class_obj.description,
+        join_code=class_obj.join_code,
+        created_at=class_obj.created_at,
+    )
 
 
 @router.delete("/{class_id}", status_code=204)

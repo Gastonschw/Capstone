@@ -3,8 +3,8 @@ Repository management API routes.
 """
 
 import uuid
-from typing import List
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Request
+from typing import List, Optional
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Request, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
@@ -12,6 +12,7 @@ from sqlalchemy.orm import selectinload
 from database import get_db
 from dependencies import get_optional_user_id
 from models.repository import Repository, DiscoveredFile
+from models.classroom import Class, ClassMember
 from schemas.repository import (
     RepositoryResponse,
     RepositoryListResponse,
@@ -19,6 +20,7 @@ from schemas.repository import (
 )
 from services.folder_service import delete_repository_files
 from services.discovery_service import run_discovery_only
+from services.user_service import get_user_role
 
 router = APIRouter(prefix="/api", tags=["repositories"])
 
@@ -27,11 +29,55 @@ router = APIRouter(prefix="/api", tags=["repositories"])
 async def list_repositories(
     request: Request,
     db: AsyncSession = Depends(get_db),
+    class_id: Optional[str] = Query(None),
+    student_user_id: Optional[str] = Query(None),
 ):
-    """List repositories. When X-User-Id header is sent, only that user's repos are returned."""
+    """List repositories. When X-User-Id header is sent, only that user's repos are returned.
+
+    With class_id and student_user_id (together), the current user must be an admin who owns
+    that class and the student must be enrolled; returns that student's recent repos.
+    """
     user_id_raw = get_optional_user_id(request)
-    owner_uuid = None
-    if user_id_raw:
+    owner_uuid: Optional[uuid.UUID] = None
+
+    if (class_id is None) ^ (student_user_id is None):
+        raise HTTPException(
+            status_code=400,
+            detail="class_id and student_user_id must be provided together",
+        )
+
+    if class_id and student_user_id:
+        if not user_id_raw:
+            raise HTTPException(status_code=401, detail="Supabase user id is required (X-User-Id header)")
+        try:
+            current_uid = uuid.UUID(user_id_raw)
+            class_uuid = uuid.UUID(class_id)
+            student_uuid = uuid.UUID(student_user_id)
+        except (ValueError, TypeError):
+            raise HTTPException(status_code=400, detail="Invalid UUID in class_id or student_user_id")
+
+        role = await get_user_role(db, current_uid)
+        if role != "admin":
+            raise HTTPException(status_code=403, detail="Only admins can list another user's repositories")
+
+        cres = await db.execute(select(Class).where(Class.id == class_uuid))
+        cobj = cres.scalar_one_or_none()
+        if not cobj:
+            raise HTTPException(status_code=404, detail="Class not found")
+        if cobj.owner_user_id != current_uid:
+            raise HTTPException(status_code=403, detail="You do not teach this class")
+
+        mres = await db.execute(
+            select(ClassMember).where(
+                ClassMember.class_id == class_uuid,
+                ClassMember.user_id == student_uuid,
+            )
+        )
+        if mres.scalar_one_or_none() is None:
+            raise HTTPException(status_code=403, detail="That user is not a member of this class")
+
+        owner_uuid = student_uuid
+    elif user_id_raw:
         try:
             owner_uuid = uuid.UUID(user_id_raw)
         except (ValueError, TypeError):
