@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import React, { useState, useEffect, useMemo } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import Header from '../components/common/Header';
 import Sidebar from '../components/common/Sidebar';
 import UploadForm from '../components/upload/UploadForm';
@@ -81,6 +81,21 @@ const styles = {
 
 export default function AnalyzerPage() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const inspectCtx = useMemo(() => {
+    const c = searchParams.get('inspectClass');
+    const s = searchParams.get('inspectStudent');
+    const n = searchParams.get('inspectName');
+    if (c && s) {
+      return {
+        classId: c,
+        studentId: s,
+        label: n ? decodeURIComponent(n) : 'Student',
+      };
+    }
+    return null;
+  }, [searchParams]);
+
   const [repositories, setRepositories] = useState([]);
   const [selectedRepo, setSelectedRepo] = useState(null);
   const [view, setView] = useState('upload');
@@ -96,11 +111,8 @@ export default function AnalyzerPage() {
   const [authLoading, setAuthLoading] = useState(isSupabaseConfigured);
 
   useEffect(() => {
-    loadRepositories();
-
     const params = new URLSearchParams(window.location.search);
     if (params.get('github_auth')) {
-      // Store session_id from OAuth callback (cross-origin cookie fallback)
       const sid = params.get('session_id');
       if (sid) {
         import('../api').then(({ setSessionId }) => setSessionId(sid));
@@ -108,6 +120,36 @@ export default function AnalyzerPage() {
       window.history.replaceState({}, '', window.location.pathname);
     }
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        if (!inspectCtx) {
+          const repos = await listRepositories();
+          if (cancelled) return;
+          setRepositories(Array.isArray(repos) ? repos : []);
+          setSelectedRepo(null);
+          setView('upload');
+          return;
+        }
+        const repos = await listRepositories({
+          classId: inspectCtx.classId,
+          studentUserId: inspectCtx.studentId,
+        });
+        if (cancelled) return;
+        const list = Array.isArray(repos) ? repos : [];
+        setRepositories(list);
+        setSelectedRepo(list[0] ?? null);
+        setView(list.length > 0 ? 'browser' : 'upload');
+      } catch (err) {
+        if (!cancelled) console.error('Failed to load repositories:', err);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [inspectCtx]);
 
   useEffect(() => {
     if (!isSupabaseConfigured || !supabase) {
@@ -186,17 +228,20 @@ export default function AnalyzerPage() {
 
   const loadRepositories = async () => {
     try {
-      const repos = await listRepositories();
-      setRepositories(repos);
+      const repos = inspectCtx
+        ? await listRepositories({ classId: inspectCtx.classId, studentUserId: inspectCtx.studentId })
+        : await listRepositories();
+      setRepositories(Array.isArray(repos) ? repos : []);
     } catch (err) {
       console.error('Failed to load repositories:', err);
     }
   };
 
   const handleRepositoryCreated = (repository) => {
-    loadRepositories();
+    if (inspectCtx) return;
     setSelectedRepo(repository);
     setView('browser');
+    loadRepositories();
   };
 
   const handleRepositorySelect = (repo) => {
@@ -208,6 +253,10 @@ export default function AnalyzerPage() {
     loadRepositories();
     setSelectedRepo(null);
     setView('upload');
+  };
+
+  const handleExitInspect = () => {
+    navigate('/analyzer', { replace: true });
   };
 
   const handleAnalysisComplete = (analysis, type) => {
@@ -233,15 +282,19 @@ export default function AnalyzerPage() {
       case 'upload':
         return (
           <div>
-            <UploadForm onRepositoryCreated={handleRepositoryCreated} tamuApiKey={chatApiKey} />
+            {!inspectCtx && (
+              <UploadForm onRepositoryCreated={handleRepositoryCreated} tamuApiKey={chatApiKey} />
+            )}
             <ClassesPanel />
             {repositories.length === 0 && (
               <div style={styles.welcome}>
-                <h2 style={styles.welcomeTitle}>Welcome to Combined Analyzer</h2>
+                <h2 style={styles.welcomeTitle}>
+                  {inspectCtx ? "This student has no repositories yet" : 'Welcome to Combined Analyzer'}
+                </h2>
                 <p style={styles.welcomeText}>
-                  Upload a project folder or connect to GitHub to analyze your codebase.
-                  Run ERD analysis to check database design against user stories,
-                  or run Integrity analysis to assess security characteristics.
+                  {inspectCtx
+                    ? 'They have not uploaded or imported a project linked to their account.'
+                    : 'Upload a project folder or connect to GitHub to analyze your codebase. Run ERD analysis to check database design against user stories, or run Integrity analysis to assess security characteristics.'}
                 </p>
               </div>
             )}
@@ -342,6 +395,10 @@ export default function AnalyzerPage() {
             setSelectedRepo(null);
             setView('upload');
           }}
+          inspectMode={Boolean(inspectCtx)}
+          inspectLabel={inspectCtx?.label}
+          onExitInspect={handleExitInspect}
+          disableNewAnalysis={Boolean(inspectCtx)}
         />
         <main style={styles.content}>
           {renderContent()}

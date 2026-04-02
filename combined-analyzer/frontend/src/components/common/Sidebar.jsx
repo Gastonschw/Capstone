@@ -146,20 +146,71 @@ const styles = {
   },
 };
 
-export default function Sidebar({ repositories, selectedRepo, onRepositorySelect, onNewAnalysis, onOpenComparison }) {
+const inspectBanner = {
+  wrap: {
+    padding: '10px 12px',
+    backgroundColor: '#fff8e1',
+    borderBottom: '1px solid #e8d9a8',
+    fontSize: '12px',
+    color: '#5c4a00',
+    lineHeight: 1.4,
+  },
+  exit: {
+    marginTop: '8px',
+    padding: '6px 10px',
+    borderRadius: '6px',
+    border: '1px solid #c9b866',
+    background: '#fff',
+    color: '#1e3a5f',
+    fontSize: '12px',
+    fontWeight: 600,
+    cursor: 'pointer',
+  },
+};
+
+export default function Sidebar({
+  repositories,
+  selectedRepo,
+  onRepositorySelect,
+  onNewAnalysis,
+  onOpenComparison,
+  inspectMode = false,
+  inspectLabel = '',
+  onExitInspect,
+  disableNewAnalysis = false,
+}) {
   return (
     <aside style={styles.sidebar}>
       <div style={styles.header}>
         <h2 style={styles.title}>Repositories</h2>
         <div style={styles.headerActions}>
-          <button style={styles.compareButton} onClick={onOpenComparison}>
+          <button type="button" style={styles.compareButton} onClick={onOpenComparison}>
             Compare
           </button>
-          <button style={styles.newButton} onClick={onNewAnalysis}>
+          <button
+            type="button"
+            style={{
+              ...styles.newButton,
+              ...(disableNewAnalysis ? { opacity: 0.45, cursor: 'not-allowed' } : {}),
+            }}
+            onClick={disableNewAnalysis ? undefined : onNewAnalysis}
+            disabled={disableNewAnalysis}
+          >
             + New
           </button>
         </div>
       </div>
+
+      {inspectMode && inspectLabel ? (
+        <div style={inspectBanner.wrap}>
+          Viewing runs for <strong>{inspectLabel}</strong>
+          {onExitInspect ? (
+            <button type="button" style={inspectBanner.exit} onClick={onExitInspect}>
+              Back to my repositories
+            </button>
+          ) : null}
+        </div>
+      ) : null}
 
       <div style={styles.repoList}>
         {repositories.length === 0 ? (
