@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   listMyClasses,
@@ -8,6 +8,7 @@ import {
   removeClassMember,
   rotateClassJoinCode,
 } from '../../api';
+import AppLoading from '../common/AppLoading';
 
 const styles = {
   container: {
@@ -513,34 +514,33 @@ export default function ClassesPanel() {
     setStatusType(type);
   };
 
-  useEffect(() => {
-    let cancelled = false;
-
-    const fetchClasses = async () => {
-      try {
-        const data = await listMyClasses();
-        if (cancelled) return;
-        setRole(data.role || 'general');
-        setTeaching(data.teaching || []);
-        setEnrolled(data.enrolled || []);
-      } catch (err) {
-        if (cancelled) return;
-        console.error('Failed to load classes', err);
-        setStatusMessage('Unable to load classes. Make sure you are signed in.');
-        setStatusType('error');
-      } finally {
-        if (!cancelled) {
-          setLoading(false);
-        }
-      }
-    };
-
-    fetchClasses();
-
-    return () => {
-      cancelled = true;
-    };
+  const fetchClasses = useCallback(async () => {
+    setLoading(true);
+    try {
+      const data = await listMyClasses();
+      setRole(data.role || 'general');
+      setTeaching(data.teaching || []);
+      setEnrolled(data.enrolled || []);
+    } catch (err) {
+      console.error('Failed to load classes', err);
+      setStatusMessage('Unable to load classes. Make sure you are signed in.');
+      setStatusType('error');
+    } finally {
+      setLoading(false);
+    }
   }, []);
+
+  useEffect(() => {
+    fetchClasses();
+  }, [fetchClasses]);
+
+  useEffect(() => {
+    const onRefresh = () => {
+      fetchClasses();
+    };
+    window.addEventListener('combined-analyzer-classes-refresh', onRefresh);
+    return () => window.removeEventListener('combined-analyzer-classes-refresh', onRefresh);
+  }, [fetchClasses]);
 
   const handleCreateClass = async (e) => {
     e.preventDefault();
@@ -610,6 +610,15 @@ export default function ClassesPanel() {
         )}
       </div>
 
+      {loading ? (
+        <AppLoading
+          fullScreen={false}
+          message="Loading classes…"
+          subMessage="Fetching classes you teach and classes you are enrolled in."
+        />
+      ) : null}
+
+      {!loading ? (
       <div style={styles.content}>
         {role === 'admin' && (
           <div style={styles.column}>
@@ -801,6 +810,7 @@ export default function ClassesPanel() {
           </div>
         )}
       </div>
+      ) : null}
 
       <RotateJoinCodeModal
         classToRotate={joinCodeRotateClass}

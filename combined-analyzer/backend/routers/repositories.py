@@ -3,16 +3,20 @@ Repository management API routes.
 """
 
 import uuid
-from typing import List, Optional
+from typing import Dict, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Request, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
-from sqlalchemy.orm import selectinload
-
+from sqlalchemy import select, func
 from database import get_db
 from dependencies import get_optional_user_id
 from models.repository import Repository, DiscoveredFile
 from models.classroom import Class, ClassMember
+from models.erd_analysis import ERDAnalysis
+from models.integrity_analysis import IntegrityAnalysis
+from models.compliance_analysis import ComplianceAnalysis
+from models.correctness_analysis import CorrectnessAnalysis
+from models.usability_analysis import UsabilityAnalysis
+from models.maintainability_analysis import MaintainabilityAnalysis
 from schemas.repository import (
     RepositoryResponse,
     RepositoryListResponse,
@@ -21,8 +25,41 @@ from schemas.repository import (
 from services.folder_service import delete_repository_files
 from services.discovery_service import run_discovery_only
 from services.user_service import get_user_role
+from services.repository_access import require_repository_access
 
 router = APIRouter(prefix="/api", tags=["repositories"])
+
+_COMPLETED = "completed"
+
+
+async def _completed_analysis_counts(
+    db: AsyncSession,
+    repository_ids: List[int],
+    model,
+) -> Dict[int, int]:
+    """Map repository_id -> count of completed analyses (single indexed query per type)."""
+    if not repository_ids:
+        return {}
+    result = await db.execute(
+        select(model.repository_id, func.count())
+        .where(
+            model.repository_id.in_(repository_ids),
+            model.status == _COMPLETED,
+        )
+        .group_by(model.repository_id)
+    )
+    return {row[0]: row[1] for row in result.all()}
+
+
+async def _discovered_file_counts(db: AsyncSession, repository_ids: List[int]) -> Dict[int, int]:
+    if not repository_ids:
+        return {}
+    result = await db.execute(
+        select(DiscoveredFile.repository_id, func.count())
+        .where(DiscoveredFile.repository_id.in_(repository_ids))
+        .group_by(DiscoveredFile.repository_id)
+    )
+    return {row[0]: row[1] for row in result.all()}
 
 
 @router.get("/repositories", response_model=List[RepositoryListResponse])
@@ -82,27 +119,25 @@ async def list_repositories(
             owner_uuid = uuid.UUID(user_id_raw)
         except (ValueError, TypeError):
             pass
-    q = (
-        select(Repository)
-        .options(selectinload(Repository.discovered_files))
-        .options(selectinload(Repository.erd_analyses))
-        .options(selectinload(Repository.integrity_analyses))
-        .options(selectinload(Repository.compliance_analyses))
-        .options(selectinload(Repository.correctness_analyses))
-        .options(selectinload(Repository.usability_analyses))
-        .options(selectinload(Repository.maintainability_analyses))
-        .order_by(Repository.created_at.desc())
-    )
+    else:
+        # Unauthenticated listing would expose arbitrary repositories; return none.
+        return []
+
+    q = select(Repository).order_by(Repository.created_at.desc())
     if owner_uuid is not None:
         q = q.where(Repository.owner_user_id == owner_uuid)
-    # Only return the most recent 5 repositories for this user (or fewer if less exist)
     q = q.limit(5)
     result = await db.execute(q)
     repositories = result.scalars().all()
 
-    def completed_count(analyses):
-        """Count only analyses with status 'completed' so sidebar badges match Latest results."""
-        return sum(1 for a in (analyses or []) if getattr(a, "status", None) == "completed")
+    repo_ids = [repo.id for repo in repositories]
+    file_c = await _discovered_file_counts(db, repo_ids)
+    erd_c = await _completed_analysis_counts(db, repo_ids, ERDAnalysis)
+    int_c = await _completed_analysis_counts(db, repo_ids, IntegrityAnalysis)
+    comp_c = await _completed_analysis_counts(db, repo_ids, ComplianceAnalysis)
+    corr_c = await _completed_analysis_counts(db, repo_ids, CorrectnessAnalysis)
+    usa_c = await _completed_analysis_counts(db, repo_ids, UsabilityAnalysis)
+    main_c = await _completed_analysis_counts(db, repo_ids, MaintainabilityAnalysis)
 
     return [
         RepositoryListResponse(
@@ -111,44 +146,38 @@ async def list_repositories(
             source_type=repo.source_type,
             github_url=repo.github_url,
             created_at=repo.created_at,
-            file_count=len(repo.discovered_files),
-            erd_analysis_count=completed_count(repo.erd_analyses),
-            integrity_analysis_count=completed_count(repo.integrity_analyses),
-            compliance_analysis_count=completed_count(repo.compliance_analyses),
-            correctness_analysis_count=completed_count(repo.correctness_analyses),
-            usability_analysis_count=completed_count(repo.usability_analyses),
-            maintainability_analysis_count=completed_count(repo.maintainability_analyses),
+            file_count=file_c.get(repo.id, 0),
+            erd_analysis_count=erd_c.get(repo.id, 0),
+            integrity_analysis_count=int_c.get(repo.id, 0),
+            compliance_analysis_count=comp_c.get(repo.id, 0),
+            correctness_analysis_count=corr_c.get(repo.id, 0),
+            usability_analysis_count=usa_c.get(repo.id, 0),
+            maintainability_analysis_count=main_c.get(repo.id, 0),
         )
         for repo in repositories
     ]
 
 
 @router.get("/repository/{repository_id}", response_model=RepositoryResponse)
-async def get_repository(repository_id: int, db: AsyncSession = Depends(get_db)):
+async def get_repository(
+    repository_id: int,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
     """Get a repository with its discovered files."""
-    result = await db.execute(
-        select(Repository)
-        .options(selectinload(Repository.discovered_files))
-        .where(Repository.id == repository_id)
+    return await require_repository_access(
+        request, db, repository_id, with_discovered_files=True
     )
-    repository = result.scalar_one_or_none()
-
-    if not repository:
-        raise HTTPException(status_code=404, detail="Repository not found")
-
-    return repository
 
 
 @router.delete("/repository/{repository_id}")
-async def delete_repository(repository_id: int, db: AsyncSession = Depends(get_db)):
+async def delete_repository(
+    repository_id: int,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
     """Delete a repository and its files."""
-    result = await db.execute(
-        select(Repository).where(Repository.id == repository_id)
-    )
-    repository = result.scalar_one_or_none()
-
-    if not repository:
-        raise HTTPException(status_code=404, detail="Repository not found")
+    repository = await require_repository_access(request, db, repository_id)
 
     # Delete local files
     delete_repository_files(repository.local_path)
@@ -164,16 +193,11 @@ async def delete_repository(repository_id: int, db: AsyncSession = Depends(get_d
 async def update_file_selection(
     repository_id: int,
     update: FileSelectionUpdate,
-    db: AsyncSession = Depends(get_db)
+    request: Request,
+    db: AsyncSession = Depends(get_db),
 ):
     """Update file selection for a specific analysis type."""
-    # Verify repository exists
-    result = await db.execute(
-        select(Repository).where(Repository.id == repository_id)
-    )
-    repository = result.scalar_one_or_none()
-    if not repository:
-        raise HTTPException(status_code=404, detail="Repository not found")
+    await require_repository_access(request, db, repository_id)
 
     # Update file selections
     result = await db.execute(
@@ -212,16 +236,11 @@ async def update_file_selection(
 async def rediscover_files(
     repository_id: int,
     background_tasks: BackgroundTasks,
-    db: AsyncSession = Depends(get_db)
+    request: Request,
+    db: AsyncSession = Depends(get_db),
 ):
     """Re-run file discovery for a repository."""
-    result = await db.execute(
-        select(Repository).where(Repository.id == repository_id)
-    )
-    repository = result.scalar_one_or_none()
-
-    if not repository:
-        raise HTTPException(status_code=404, detail="Repository not found")
+    repository = await require_repository_access(request, db, repository_id)
 
     # Run discovery in background
     discovery_result = await run_discovery_only(repository, db)

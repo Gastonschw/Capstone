@@ -88,6 +88,7 @@ export default function JoinClassPage() {
     setSubmitting(true);
     try {
       await joinClassByCode(trimmed);
+      window.dispatchEvent(new CustomEvent('combined-analyzer-classes-refresh'));
       navigate('/analyzer', { replace: true });
     } catch (err) {
       const msg =

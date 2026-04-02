@@ -1,11 +1,13 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, lazy, Suspense } from 'react';
 import { Routes, Route, useNavigate, useLocation } from 'react-router-dom';
 import LandingPage from './pages/LandingPage';
 import AnalyzerPage from './pages/AnalyzerPage';
-import ComparisonPage from './pages/ComparisonPage';
 import JoinClassPage from './pages/JoinClassPage';
+
+const ComparisonPage = lazy(() => import('./pages/ComparisonPage'));
 import { setCurrentUserId, listMyClasses } from './api';
 import { supabase, isSupabaseConfigured } from './lib/supabaseClient';
+import AppLoading from './components/common/AppLoading';
 
 const LOGIN_ERROR_MESSAGE = 'Sign-in was cancelled or failed. Please try again.';
 
@@ -62,7 +64,29 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [authLoading, authUser, isSupabaseConfigured, location.pathname]);
+  }, [authLoading, authUser, isSupabaseConfigured]);
+
+  useEffect(() => {
+    const onClassesRefresh = () => {
+      if (!authUser || !isSupabaseConfigured || authLoading) return;
+      setClassGate({ status: 'loading' });
+      listMyClasses()
+        .then((data) => {
+          const role = data.role || 'general';
+          const enrolled = data.enrolled || [];
+          if (role === 'admin') {
+            setClassGate({ status: 'admin' });
+          } else if (enrolled.length === 0) {
+            setClassGate({ status: 'need-join' });
+          } else {
+            setClassGate({ status: 'student-ok' });
+          }
+        })
+        .catch(() => setClassGate({ status: 'error' }));
+    };
+    window.addEventListener('combined-analyzer-classes-refresh', onClassesRefresh);
+    return () => window.removeEventListener('combined-analyzer-classes-refresh', onClassesRefresh);
+  }, [authLoading, authUser, isSupabaseConfigured]);
 
   useEffect(() => {
     if (authLoading) return;
@@ -127,20 +151,27 @@ export default function App() {
   const gatePending =
     isSupabaseConfigured && authUser && (classGate.status === 'idle' || classGate.status === 'loading');
 
-  if ((authLoading && isSupabaseConfigured) || gatePending) {
+  if (authLoading && isSupabaseConfigured) {
+    return <AppLoading message="Signing you in…" subMessage="Verifying your account." />;
+  }
+
+  if (gatePending) {
     return (
-      <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', backgroundColor: '#f5f7fa' }}>
-        <span style={{ color: '#666' }}>Loading…</span>
-      </div>
+      <AppLoading
+        message="Loading your classes…"
+        subMessage="Checking enrollment and where to send you next."
+      />
     );
   }
 
   return (
-    <Routes>
-      <Route path="/" element={<LandingPage loginError={loginError} onClearLoginError={() => setLoginError(null)} />} />
-      <Route path="/join-class" element={<JoinClassPage />} />
-      <Route path="/analyzer" element={<AnalyzerPage />} />
-      <Route path="/compare" element={<ComparisonPage />} />
-    </Routes>
+    <Suspense fallback={<AppLoading message="Loading…" subMessage="Opening this page." />}>
+      <Routes>
+        <Route path="/" element={<LandingPage loginError={loginError} onClearLoginError={() => setLoginError(null)} />} />
+        <Route path="/join-class" element={<JoinClassPage />} />
+        <Route path="/analyzer" element={<AnalyzerPage />} />
+        <Route path="/compare" element={<ComparisonPage />} />
+      </Routes>
+    </Suspense>
   );
 }
