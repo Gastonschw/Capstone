@@ -231,6 +231,57 @@ def prepare_file_contents(repo_path: str, files: List[Dict], limit: int = 30) ->
     return file_contents
 
 
+async def load_user_stories_for_repo(
+    repo_path: str, repository_id: int, db: AsyncSession
+) -> str:
+    """
+    Load user story content for a repository from discovered files.
+    Returns concatenated user stories text, or empty string if none found.
+    """
+    result = await db.execute(
+        select(DiscoveredFile).where(
+            DiscoveredFile.repository_id == repository_id,
+            DiscoveredFile.file_type == FileType.user_story.value,
+            DiscoveredFile.is_selected_erd == True,
+        )
+    )
+    story_files = result.scalars().all()
+    if not story_files:
+        return ""
+
+    all_stories = []
+    for sf in story_files:
+        full_path = Path(repo_path) / sf.file_path
+        try:
+            with open(full_path, 'r', encoding='utf-8', errors='ignore') as f:
+                content = f.read()
+            all_stories.append(f"## From: {sf.file_path}\n\n{content}")
+        except Exception:
+            pass
+
+    return "\n\n---\n\n".join(all_stories)
+
+
+def build_user_stories_prompt_section(user_stories: str) -> str:
+    """Build the user stories section to inject into analysis prompts."""
+    if not user_stories.strip():
+        return ""
+    return f"""
+
+## User Stories / Requirements Documentation:
+The following user stories and/or acceptance criteria have been provided for this project. You MUST cross-reference the code against these requirements:
+
+{user_stories}
+
+## Additional Instructions for User Story Compliance:
+- For each user story, check whether the code implements the described functionality.
+- Flag any user stories that appear to be NOT implemented or only PARTIALLY implemented in the code.
+- Flag any code that contradicts or violates the acceptance criteria.
+- In your findings, reference the specific user story ID (e.g., US-01) when a finding relates to a requirement.
+- In your recommendations, suggest what needs to be added or changed to satisfy unmet user stories.
+"""
+
+
 async def analyze_confidentiality(
     repo_path: str, files: List[Dict], api_key: Optional[str] = None, model: Optional[str] = None
 ) -> CharacteristicReport:

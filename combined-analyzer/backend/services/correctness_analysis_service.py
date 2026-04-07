@@ -27,6 +27,8 @@ from services.integrity_analysis_service import (
     CharacteristicReport,
     _description_from_result,
     _log_incomplete_response,
+    load_user_stories_for_repo,
+    build_user_stories_prompt_section,
 )
 
 
@@ -41,10 +43,12 @@ class CorrectnessAnalysisResult:
 
 
 async def analyze_functional_completeness_correctness(
-    repo_path: str, files: List[Dict], api_key: Optional[str] = None, model: Optional[str] = None
+    repo_path: str, files: List[Dict], api_key: Optional[str] = None, model: Optional[str] = None,
+    user_stories: str = ""
 ) -> CharacteristicReport:
     """Analyze completeness from a correctness perspective - are all required computations present?"""
     file_contents = prepare_file_contents(repo_path, files)
+    stories_section = build_user_stories_prompt_section(user_stories)
 
     prompt = f"""Analyze the following codebase for FUNCTIONAL COMPLETENESS (Correctness Perspective) - whether all required computations and data transformations are fully implemented.
 
@@ -55,7 +59,7 @@ Look for:
 4. Missing null/undefined checks before computations
 5. Incomplete loop termination conditions
 6. Missing aggregation or reduction operations
-
+{stories_section}
 Files to analyze:
 {json.dumps(file_contents, indent=2)}
 
@@ -262,7 +266,10 @@ async def run_correctness_analysis(
 
     file_list = [{'file_path': f.file_path, 'file_type': f.file_type} for f in files]
 
-    completeness = await analyze_functional_completeness_correctness(repo_path, file_list, api_key, model)
+    # Load user stories for requirements-aware analysis
+    user_stories = await load_user_stories_for_repo(repo_path, repository.id, db)
+
+    completeness = await analyze_functional_completeness_correctness(repo_path, file_list, api_key, model, user_stories=user_stories)
     accuracy = await analyze_functional_correctness_accuracy(repo_path, file_list, api_key, model)
     appropriateness = await analyze_functional_appropriateness_correctness(repo_path, file_list, api_key, model)
 
