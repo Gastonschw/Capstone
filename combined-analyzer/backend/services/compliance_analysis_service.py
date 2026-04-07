@@ -27,6 +27,8 @@ from services.integrity_analysis_service import (
     CharacteristicReport,
     _description_from_result,
     _log_incomplete_response,
+    load_user_stories_for_repo,
+    build_user_stories_prompt_section,
 )
 
 
@@ -41,10 +43,12 @@ class ComplianceAnalysisResult:
 
 
 async def analyze_functional_completeness(
-    repo_path: str, files: List[Dict], api_key: Optional[str] = None, model: Optional[str] = None
+    repo_path: str, files: List[Dict], api_key: Optional[str] = None, model: Optional[str] = None,
+    user_stories: str = ""
 ) -> CharacteristicReport:
     """Analyze whether all specified functions are implemented."""
     file_contents = prepare_file_contents(repo_path, files)
+    stories_section = build_user_stories_prompt_section(user_stories)
 
     prompt = f"""Analyze the following codebase for FUNCTIONAL COMPLETENESS - whether all specified or implied functions have been implemented.
 
@@ -55,7 +59,7 @@ Look for:
 4. Error handling completeness - are all error paths covered?
 5. Validation completeness - are all inputs validated?
 6. Missing functionality gaps evident from code patterns
-
+{stories_section}
 Files to analyze:
 {json.dumps(file_contents, indent=2)}
 
@@ -93,10 +97,12 @@ Respond with a JSON object:
 
 
 async def analyze_functional_correctness(
-    repo_path: str, files: List[Dict], api_key: Optional[str] = None, model: Optional[str] = None
+    repo_path: str, files: List[Dict], api_key: Optional[str] = None, model: Optional[str] = None,
+    user_stories: str = ""
 ) -> CharacteristicReport:
     """Analyze whether functions provide correct results."""
     file_contents = prepare_file_contents(repo_path, files)
+    stories_section = build_user_stories_prompt_section(user_stories)
 
     prompt = f"""Analyze the following codebase for FUNCTIONAL CORRECTNESS - whether the implemented functions provide correct results with the needed degree of precision.
 
@@ -107,7 +113,7 @@ Look for:
 4. Mathematical precision - are floating-point and rounding issues handled?
 5. State management correctness - is state updated consistently?
 6. Return value correctness - do functions return expected values?
-
+{stories_section}
 Files to analyze:
 {json.dumps(file_contents, indent=2)}
 
@@ -145,10 +151,12 @@ Respond with a JSON object:
 
 
 async def analyze_functional_appropriateness(
-    repo_path: str, files: List[Dict], api_key: Optional[str] = None, model: Optional[str] = None
+    repo_path: str, files: List[Dict], api_key: Optional[str] = None, model: Optional[str] = None,
+    user_stories: str = ""
 ) -> CharacteristicReport:
     """Analyze whether functions facilitate the accomplishment of specified tasks."""
     file_contents = prepare_file_contents(repo_path, files)
+    stories_section = build_user_stories_prompt_section(user_stories)
 
     prompt = f"""Analyze the following codebase for FUNCTIONAL APPROPRIATENESS - whether the functions facilitate the accomplishment of specified tasks and objectives.
 
@@ -159,7 +167,7 @@ Look for:
 4. Workflow efficiency - do functions support efficient task completion?
 5. Abstraction level - are abstractions at the right level?
 6. Helper/utility appropriateness - are helpers useful and well-placed?
-
+{stories_section}
 Files to analyze:
 {json.dumps(file_contents, indent=2)}
 
@@ -261,9 +269,12 @@ async def run_compliance_analysis(
 
     file_list = [{'file_path': f.file_path, 'file_type': f.file_type} for f in files]
 
-    functional_completeness = await analyze_functional_completeness(repo_path, file_list, api_key, model)
-    functional_correctness = await analyze_functional_correctness(repo_path, file_list, api_key, model)
-    functional_appropriateness = await analyze_functional_appropriateness(repo_path, file_list, api_key, model)
+    # Load user stories for requirements-aware analysis
+    user_stories = await load_user_stories_for_repo(repo_path, repository.id, db)
+
+    functional_completeness = await analyze_functional_completeness(repo_path, file_list, api_key, model, user_stories=user_stories)
+    functional_correctness = await analyze_functional_correctness(repo_path, file_list, api_key, model, user_stories=user_stories)
+    functional_appropriateness = await analyze_functional_appropriateness(repo_path, file_list, api_key, model, user_stories=user_stories)
 
     all_reports = [functional_completeness, functional_correctness, functional_appropriateness]
     summary = await generate_compliance_summary(all_reports, api_key, model)
