@@ -389,6 +389,8 @@ Look for:
 Files to analyze:
 {json.dumps(file_contents, indent=2)}
 
+IMPORTANT: Be thorough and detailed. For EACH characteristic, aim to provide 4 or more specific findings with actual code snippets and file paths. If there are genuinely fewer than 4 issues or observations to report for a characteristic, that is fine - do not fabricate findings. But do not cut short your analysis just to be brief. Give the same level of detail you would if analyzing each characteristic independently.
+
 Respond with a single JSON object containing all six characteristic evaluations plus an overall summary. Weight Resistance and Confidentiality higher in the overall score:
 {{
     "confidentiality": {{
