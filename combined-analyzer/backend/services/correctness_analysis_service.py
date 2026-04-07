@@ -159,7 +159,7 @@ Respond with a single JSON object containing all three characteristic evaluation
     }}
 }}"""
 
-    response_text = await asyncio.to_thread(_tamu_completion, api_key, prompt, 8192, model)
+    response_text = await asyncio.to_thread(_tamu_completion, api_key, prompt, 16384, model)
     result = parse_json_response(response_text)
 
     if not result:
