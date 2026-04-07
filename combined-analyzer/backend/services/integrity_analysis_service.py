@@ -1,10 +1,11 @@
 """
 Integrity Analysis Service
 
-Multi-agent workflow for security integrity analysis:
-1. File Discovery - identify security-relevant files
-2. 6 Characteristic Agents - analyze each security characteristic
-3. Summary Agent - generate overall assessment
+Single-prompt workflow for security integrity analysis:
+1. One combined prompt evaluates all 6 characteristics + summary
+2. Response is split into individual CharacteristicReport objects
+
+Also exports shared utilities used by other analysis services.
 
 Uses TAMU API (OpenAI-compatible) so the same API key as chat works.
 """
@@ -282,384 +283,19 @@ The following user stories and/or acceptance criteria have been provided for thi
 """
 
 
-async def analyze_confidentiality(
-    repo_path: str, files: List[Dict], api_key: Optional[str] = None, model: Optional[str] = None
-) -> CharacteristicReport:
-    """
-    Analyze whether unauthorized users cannot access private data.
-    """
-    file_contents = prepare_file_contents(repo_path, files)
-
-    prompt = f"""Analyze the following codebase for CONFIDENTIALITY - whether unauthorized users cannot access private data.
-
-Look for:
-1. Access control mechanisms (role-based access, permissions)
-2. Data encryption (at rest and in transit)
-3. Secure storage of sensitive data (passwords, tokens, API keys)
-4. Environment variable usage for secrets
-5. Proper visibility/scope of sensitive functions and data
-6. Session management and token handling
-
-For each finding, provide:
-- The specific file and line number (if identifiable)
-- A relevant code snippet (max 5 lines)
-- Explanation of whether it supports or undermines confidentiality
-
-Files to analyze:
-{json.dumps(file_contents, indent=2)}
-
-Respond with a JSON object:
-{{
-    "score": <0-100 score>,
-    "status": "<fulfilled|partially_fulfilled|not_fulfilled|not_applicable>",
-    "description": "<2-3 sentence summary of confidentiality posture>",
-    "findings": [
-        {{
-            "type": "<positive|negative|warning>",
-            "file_path": "<path>",
-            "line_number": <number or null>,
-            "code_snippet": "<relevant code>",
-            "explanation": "<what this means for confidentiality>"
-        }}
-    ],
-    "recommendations": ["<actionable recommendation>", ...]
-}}"""
-
-    response_text = await asyncio.to_thread(_tamu_completion, api_key, prompt, 4096, model)
-    result = parse_json_response(response_text)
-    default_desc = "No structured result from model (check API key and response format)." if not result else "Analysis incomplete"
-    description = _description_from_result(result, default_desc)
-    _log_incomplete_response("Confidentiality", result, response_text or "")
-
+def _extract_characteristic(result: Dict, key: str, label: str) -> CharacteristicReport:
+    """Extract a single characteristic report from the combined response."""
+    data = result.get(key, {})
+    if not isinstance(data, dict):
+        data = {}
     return CharacteristicReport(
-        characteristic="Confidentiality",
-        score=result.get("score", 50),
-        status=result.get("status", "partially_fulfilled"),
-        description=description,
-        findings=result.get("findings", []),
-        recommendations=result.get("recommendations", [])
+        characteristic=label,
+        score=data.get("score", 50),
+        status=data.get("status", "partially_fulfilled"),
+        description=data.get("description", "Analysis incomplete"),
+        findings=data.get("findings", []),
+        recommendations=data.get("recommendations", []),
     )
-
-
-async def analyze_data_integrity(
-    repo_path: str, files: List[Dict], api_key: Optional[str] = None, model: Optional[str] = None
-) -> CharacteristicReport:
-    """
-    Analyze whether data cannot be modified without authorization.
-    """
-    file_contents = prepare_file_contents(repo_path, files)
-
-    prompt = f"""Analyze the following codebase for DATA INTEGRITY - whether data cannot be modified without authorization and validations prevent corruption.
-
-Look for:
-1. Input validation (type checking, format validation, range checks)
-2. Data sanitization before storage
-3. Database constraints and transactions
-4. Immutability patterns where appropriate
-5. Checksums or hashes for data verification
-6. Proper error handling that prevents partial updates
-7. Authorization checks before data modification
-
-Files to analyze:
-{json.dumps(file_contents, indent=2)}
-
-Respond with a JSON object:
-{{
-    "score": <0-100 score>,
-    "status": "<fulfilled|partially_fulfilled|not_fulfilled|not_applicable>",
-    "description": "<2-3 sentence summary of data integrity posture>",
-    "findings": [
-        {{
-            "type": "<positive|negative|warning>",
-            "file_path": "<path>",
-            "line_number": <number or null>,
-            "code_snippet": "<relevant code>",
-            "explanation": "<what this means for data integrity>"
-        }}
-    ],
-    "recommendations": ["<actionable recommendation>", ...]
-}}"""
-
-    response_text = await asyncio.to_thread(_tamu_completion, api_key, prompt, 4096, model)
-    result = parse_json_response(response_text)
-    default_desc = "No structured result from model (check API key and response format)." if not result else "Analysis incomplete"
-    description = _description_from_result(result, default_desc)
-    _log_incomplete_response("Data Integrity", result, response_text or "")
-
-    return CharacteristicReport(
-        characteristic="Data Integrity",
-        score=result.get('score', 50),
-        status=result.get('status', 'partially_fulfilled'),
-        description=description,
-        findings=result.get("findings", []),
-        recommendations=result.get("recommendations", [])
-    )
-
-
-async def analyze_authenticity(
-    repo_path: str, files: List[Dict], api_key: Optional[str] = None, model: Optional[str] = None
-) -> CharacteristicReport:
-    """
-    Analyze whether users are who they claim to be.
-    """
-    file_contents = prepare_file_contents(repo_path, files)
-
-    prompt = f"""Analyze the following codebase for AUTHENTICITY - whether users are who they claim to be.
-
-Look for:
-1. Authentication mechanisms (OAuth, JWT, session-based, API keys)
-2. Password hashing algorithms (bcrypt, argon2, etc.)
-3. Multi-factor authentication support
-4. Token validation and verification
-5. Identity provider integration
-6. Secure password reset flows
-7. Session invalidation on logout
-
-Files to analyze:
-{json.dumps(file_contents, indent=2)}
-
-Respond with a JSON object:
-{{
-    "score": <0-100 score>,
-    "status": "<fulfilled|partially_fulfilled|not_fulfilled|not_applicable>",
-    "description": "<2-3 sentence summary of authenticity posture>",
-    "findings": [
-        {{
-            "type": "<positive|negative|warning>",
-            "file_path": "<path>",
-            "line_number": <number or null>,
-            "code_snippet": "<relevant code>",
-            "explanation": "<what this means for authenticity>"
-        }}
-    ],
-    "recommendations": ["<actionable recommendation>", ...]
-}}"""
-
-    response_text = await asyncio.to_thread(_tamu_completion, api_key, prompt, 4096, model)
-    result = parse_json_response(response_text)
-    default_desc = "No structured result from model (check API key and response format)." if not result else "Analysis incomplete"
-    description = _description_from_result(result, default_desc)
-    _log_incomplete_response("Authenticity", result, response_text or "")
-
-    return CharacteristicReport(
-        characteristic="Authenticity",
-        score=result.get("score", 50),
-        status=result.get("status", "partially_fulfilled"),
-        description=description,
-        findings=result.get("findings", []),
-        recommendations=result.get("recommendations", [])
-    )
-
-
-async def analyze_non_repudiation(
-    repo_path: str, files: List[Dict], api_key: Optional[str] = None, model: Optional[str] = None
-) -> CharacteristicReport:
-    """
-    Analyze whether actions are logged and traceable to specific users.
-    """
-    file_contents = prepare_file_contents(repo_path, files)
-
-    prompt = f"""Analyze the following codebase for NON-REPUDIATION - whether actions are logged and traceable to specific users, preventing denial of actions.
-
-Look for:
-1. Audit logging with user identification
-2. Timestamped action records
-3. Digital signatures for critical operations
-4. Immutable audit trails
-5. Transaction logging
-6. Request/response logging with user context
-7. Event sourcing patterns
-
-Files to analyze:
-{json.dumps(file_contents, indent=2)}
-
-Respond with a JSON object:
-{{
-    "score": <0-100 score>,
-    "status": "<fulfilled|partially_fulfilled|not_fulfilled|not_applicable>",
-    "description": "<2-3 sentence summary of non-repudiation posture>",
-    "findings": [
-        {{
-            "type": "<positive|negative|warning>",
-            "file_path": "<path>",
-            "line_number": <number or null>,
-            "code_snippet": "<relevant code>",
-            "explanation": "<what this means for non-repudiation>"
-        }}
-    ],
-    "recommendations": ["<actionable recommendation>", ...]
-}}"""
-
-    response_text = await asyncio.to_thread(_tamu_completion, api_key, prompt, 4096, model)
-    result = parse_json_response(response_text)
-    default_desc = "No structured result from model (check API key and response format)." if not result else "Analysis incomplete"
-    description = _description_from_result(result, default_desc)
-    _log_incomplete_response("Non-Repudiation", result, response_text or "")
-
-    return CharacteristicReport(
-        characteristic="Non-Repudiation",
-        score=result.get("score", 50),
-        status=result.get("status", "partially_fulfilled"),
-        description=description,
-        findings=result.get("findings", []),
-        recommendations=result.get("recommendations", [])
-    )
-
-
-async def analyze_accountability(
-    repo_path: str, files: List[Dict], api_key: Optional[str] = None, model: Optional[str] = None
-) -> CharacteristicReport:
-    """
-    Analyze whether the system tracks who did what and when.
-    """
-    file_contents = prepare_file_contents(repo_path, files)
-
-    prompt = f"""Analyze the following codebase for ACCOUNTABILITY - whether the system tracks who did what and when.
-
-Look for:
-1. User action logging
-2. Created_by/updated_by fields in data models
-3. Timestamp tracking (created_at, updated_at)
-4. Change history/versioning
-5. Activity feeds or history endpoints
-6. User session tracking
-7. Administrative action logging
-
-Files to analyze:
-{json.dumps(file_contents, indent=2)}
-
-Respond with a JSON object:
-{{
-    "score": <0-100 score>,
-    "status": "<fulfilled|partially_fulfilled|not_fulfilled|not_applicable>",
-    "description": "<2-3 sentence summary of accountability posture>",
-    "findings": [
-        {{
-            "type": "<positive|negative|warning>",
-            "file_path": "<path>",
-            "line_number": <number or null>,
-            "code_snippet": "<relevant code>",
-            "explanation": "<what this means for accountability>"
-        }}
-    ],
-    "recommendations": ["<actionable recommendation>", ...]
-}}"""
-
-    response_text = await asyncio.to_thread(_tamu_completion, api_key, prompt, 4096, model)
-    result = parse_json_response(response_text)
-    default_desc = "No structured result from model (check API key and response format)." if not result else "Analysis incomplete"
-    description = _description_from_result(result, default_desc)
-    _log_incomplete_response("Accountability", result, response_text or "")
-
-    return CharacteristicReport(
-        characteristic="Accountability",
-        score=result.get("score", 50),
-        status=result.get("status", "partially_fulfilled"),
-        description=description,
-        findings=result.get("findings", []),
-        recommendations=result.get("recommendations", [])
-    )
-
-
-async def analyze_resistance(
-    repo_path: str, files: List[Dict], api_key: Optional[str] = None, model: Optional[str] = None
-) -> CharacteristicReport:
-    """
-    Analyze whether the system resists common attacks.
-    """
-    file_contents = prepare_file_contents(repo_path, files)
-
-    prompt = f"""Analyze the following codebase for RESISTANCE - whether the system resists common attacks.
-
-Look for vulnerabilities and protections against:
-1. SQL Injection (parameterized queries, ORMs, raw SQL usage)
-2. XSS (Cross-Site Scripting) - output encoding, CSP headers, sanitization
-3. CSRF (Cross-Site Request Forgery) - token validation, SameSite cookies
-4. Parameter tampering - server-side validation, type checking
-5. Path traversal - file path validation
-6. Command injection - shell command safety
-7. Insecure deserialization
-8. Security headers (CORS, CSP, X-Frame-Options)
-
-Files to analyze:
-{json.dumps(file_contents, indent=2)}
-
-Respond with a JSON object:
-{{
-    "score": <0-100 score>,
-    "status": "<fulfilled|partially_fulfilled|not_fulfilled|not_applicable>",
-    "description": "<2-3 sentence summary of attack resistance posture>",
-    "findings": [
-        {{
-            "type": "<positive|negative|warning>",
-            "file_path": "<path>",
-            "line_number": <number or null>,
-            "code_snippet": "<relevant code>",
-            "explanation": "<what this means for attack resistance>"
-        }}
-    ],
-    "recommendations": ["<actionable recommendation>", ...]
-}}"""
-
-    response_text = await asyncio.to_thread(_tamu_completion, api_key, prompt, 4096, model)
-    result = parse_json_response(response_text)
-    default_desc = "No structured result from model (check API key and response format)." if not result else "Analysis incomplete"
-    description = _description_from_result(result, default_desc)
-    _log_incomplete_response("Resistance", result, response_text or "")
-
-    return CharacteristicReport(
-        characteristic="Resistance",
-        score=result.get("score", 50),
-        status=result.get("status", "partially_fulfilled"),
-        description=description,
-        findings=result.get("findings", []),
-        recommendations=result.get("recommendations", [])
-    )
-
-
-async def generate_summary(
-    reports: List[CharacteristicReport], api_key: Optional[str] = None, model: Optional[str] = None
-) -> Dict:
-    """
-    Generate an overall summary based on all characteristic analyses.
-    """
-    reports_data = []
-    for r in reports:
-        reports_data.append({
-            'characteristic': r.characteristic,
-            'score': r.score,
-            'status': r.status,
-            'description': r.description,
-            'finding_count': len(r.findings),
-            'positive_findings': len([f for f in r.findings if f.get('type') == 'positive']),
-            'negative_findings': len([f for f in r.findings if f.get('type') == 'negative']),
-            'recommendation_count': len(r.recommendations)
-        })
-
-    prompt = f"""Based on the following integrity analysis results, generate an executive summary.
-
-Analysis Results:
-{json.dumps(reports_data, indent=2)}
-
-Provide:
-1. An overall integrity score (weighted average, with Resistance and Confidentiality weighted higher)
-2. A brief executive summary (3-4 sentences)
-3. Top 3 strengths of the system
-4. Top 3 areas for improvement
-5. Overall risk level (low, medium, high, critical)
-
-Respond with a JSON object:
-{{
-    "overall_score": <0-100>,
-    "risk_level": "<low|medium|high|critical>",
-    "executive_summary": "<3-4 sentence summary>",
-    "strengths": ["<strength 1>", "<strength 2>", "<strength 3>"],
-    "areas_for_improvement": ["<area 1>", "<area 2>", "<area 3>"],
-    "priority_recommendations": ["<most critical recommendation>", ...]
-}}"""
-
-    response_text = await asyncio.to_thread(_tamu_completion, api_key, prompt, 2048, model)
-    return parse_json_response(response_text)
 
 
 async def run_integrity_analysis(
@@ -668,13 +304,9 @@ async def run_integrity_analysis(
     api_key: Optional[str] = None,
     model: Optional[str] = None,
 ) -> IntegrityAnalysisResult:
-    """
-    Main orchestrator: Runs the complete integrity analysis workflow.
-    Uses TAMU API with api_key (or env fallback).
-    """
+    """Main orchestrator: Runs the complete integrity analysis in a single prompt."""
     repo_path = repository.local_path
 
-    # Get selected files for integrity analysis
     result = await db.execute(
         select(DiscoveredFile).where(
             DiscoveredFile.repository_id == repository.id,
@@ -686,20 +318,125 @@ async def run_integrity_analysis(
     if not files:
         raise ValueError("No files selected for integrity analysis")
 
-    # Convert to list of dicts
     file_list = [{'file_path': f.file_path, 'file_type': f.file_type} for f in files]
+    file_contents = prepare_file_contents(repo_path, file_list)
 
-    # Run all characteristic analyses (TAMU API)
-    confidentiality = await analyze_confidentiality(repo_path, file_list, api_key, model)
-    data_integrity = await analyze_data_integrity(repo_path, file_list, api_key, model)
-    authenticity = await analyze_authenticity(repo_path, file_list, api_key, model)
-    non_repudiation = await analyze_non_repudiation(repo_path, file_list, api_key, model)
-    accountability = await analyze_accountability(repo_path, file_list, api_key, model)
-    resistance = await analyze_resistance(repo_path, file_list, api_key, model)
+    prompt = f"""Analyze the following codebase for ISO 25010 SECURITY / INTEGRITY. Evaluate ALL SIX characteristics below in a single response.
 
-    # Generate summary
-    all_reports = [confidentiality, data_integrity, authenticity, non_repudiation, accountability, resistance]
-    summary = await generate_summary(all_reports, api_key, model)
+## Characteristic 1: CONFIDENTIALITY
+Whether unauthorized users cannot access private data.
+Look for:
+1. Access control mechanisms (role-based access, permissions)
+2. Data encryption (at rest and in transit)
+3. Secure storage of sensitive data (passwords, tokens, API keys)
+4. Environment variable usage for secrets
+5. Proper visibility/scope of sensitive functions and data
+6. Session management and token handling
+
+## Characteristic 2: DATA INTEGRITY
+Whether data cannot be modified without authorization and validations prevent corruption.
+Look for:
+1. Input validation (type checking, format validation, range checks)
+2. Data sanitization before storage
+3. Database constraints and transactions
+4. Immutability patterns where appropriate
+5. Checksums or hashes for data verification
+6. Proper error handling that prevents partial updates
+7. Authorization checks before data modification
+
+## Characteristic 3: AUTHENTICITY
+Whether users are who they claim to be.
+Look for:
+1. Authentication mechanisms (OAuth, JWT, session-based, API keys)
+2. Password hashing algorithms (bcrypt, argon2, etc.)
+3. Multi-factor authentication support
+4. Token validation and verification
+5. Identity provider integration
+6. Secure password reset flows
+7. Session invalidation on logout
+
+## Characteristic 4: NON-REPUDIATION
+Whether actions are logged and traceable to specific users, preventing denial of actions.
+Look for:
+1. Audit logging with user identification
+2. Timestamped action records
+3. Digital signatures for critical operations
+4. Immutable audit trails
+5. Transaction logging
+6. Request/response logging with user context
+
+## Characteristic 5: ACCOUNTABILITY
+Whether the system tracks who did what and when.
+Look for:
+1. User action logging
+2. Created_by/updated_by fields in data models
+3. Timestamp tracking (created_at, updated_at)
+4. Change history/versioning
+5. Activity feeds or history endpoints
+6. User session tracking
+
+## Characteristic 6: RESISTANCE
+Whether the system resists common attacks.
+Look for:
+1. SQL Injection (parameterized queries, ORMs, raw SQL usage)
+2. XSS (Cross-Site Scripting) - output encoding, CSP headers, sanitization
+3. CSRF (Cross-Site Request Forgery) - token validation, SameSite cookies
+4. Parameter tampering - server-side validation, type checking
+5. Path traversal - file path validation
+6. Command injection - shell command safety
+7. Security headers (CORS, CSP, X-Frame-Options)
+
+Files to analyze:
+{json.dumps(file_contents, indent=2)}
+
+Respond with a single JSON object containing all six characteristic evaluations plus an overall summary. Weight Resistance and Confidentiality higher in the overall score:
+{{
+    "confidentiality": {{
+        "score": <0-100>,
+        "status": "<fulfilled|partially_fulfilled|not_fulfilled|not_applicable>",
+        "description": "<2-3 sentence summary>",
+        "findings": [
+            {{
+                "type": "<positive|negative|warning>",
+                "file_path": "<path>",
+                "line_number": <number or null>,
+                "code_snippet": "<relevant code>",
+                "explanation": "<what this means>"
+            }}
+        ],
+        "recommendations": ["<actionable recommendation>", ...]
+    }},
+    "data_integrity": {{ ... same structure ... }},
+    "authenticity": {{ ... same structure ... }},
+    "non_repudiation": {{ ... same structure ... }},
+    "accountability": {{ ... same structure ... }},
+    "resistance": {{ ... same structure ... }},
+    "summary": {{
+        "overall_score": <0-100 weighted average>,
+        "risk_level": "<low|medium|high|critical>",
+        "executive_summary": "<3-4 sentence overall assessment>",
+        "strengths": ["<strength 1>", "<strength 2>", "<strength 3>"],
+        "areas_for_improvement": ["<area 1>", "<area 2>", "<area 3>"],
+        "priority_recommendations": ["<most critical recommendation>", ...]
+    }}
+}}"""
+
+    response_text = await asyncio.to_thread(_tamu_completion, api_key, prompt, 16384, model)
+    result = parse_json_response(response_text)
+
+    if not result:
+        logger.warning("Integrity analysis returned no parseable result. Raw (first 800): %s", (response_text or "")[:800])
+
+    confidentiality = _extract_characteristic(result, "confidentiality", "Confidentiality")
+    data_integrity = _extract_characteristic(result, "data_integrity", "Data Integrity")
+    authenticity = _extract_characteristic(result, "authenticity", "Authenticity")
+    non_repudiation = _extract_characteristic(result, "non_repudiation", "Non-Repudiation")
+    accountability = _extract_characteristic(result, "accountability", "Accountability")
+    resistance = _extract_characteristic(result, "resistance", "Resistance")
+
+    summary = result.get("summary", {})
+    if not isinstance(summary, dict):
+        summary = {}
 
     return IntegrityAnalysisResult(
         confidentiality=confidentiality,
@@ -709,5 +446,5 @@ async def run_integrity_analysis(
         accountability=accountability,
         resistance=resistance,
         overall_score=summary.get('overall_score', 50),
-        summary=summary
+        summary=summary,
     )
