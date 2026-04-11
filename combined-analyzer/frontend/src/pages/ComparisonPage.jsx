@@ -9,7 +9,6 @@ import {
   sendChatMessage,
 } from '../api';
 import {
-  deterministicCompareFindings,
   extractIsoFindings,
   mergeAiMatches,
   summarizeFindings,
@@ -19,7 +18,7 @@ const CHAT_API_KEY_STORAGE = 'tamu_chat_api_key';
 const CHAT_MODEL_STORAGE = 'tamu_chat_model';
 const DEFAULT_CHAT_MODEL = 'protected.Claude Opus 4.5';
 const AI_CONFIDENCE_THRESHOLD = 0.75;
-const AI_MAX_UNMATCHED = 60;
+const AI_MAX_UNMATCHED = Number.POSITIVE_INFINITY;
 
 const styles = {
   page: {
@@ -394,15 +393,20 @@ export default function ComparisonPage() {
 
       const baselineFindings = extractIsoFindings(baselineAnalysis, analysisType);
       const currentFindings = extractIsoFindings(currentAnalysis, analysisType);
-      const deterministic = deterministicCompareFindings(baselineFindings, currentFindings);
-
-      const limitedBaseline = deterministic.unmatchedBaseline.slice(0, AI_MAX_UNMATCHED).map((entry) => entry.finding);
-      const limitedCurrent = deterministic.unmatchedCurrent.slice(0, AI_MAX_UNMATCHED).map((entry) => entry.finding);
-      const baselineTruncated = deterministic.unmatchedBaseline.length > limitedBaseline.length;
-      const currentTruncated = deterministic.unmatchedCurrent.length > limitedCurrent.length;
+      const aiInput = {
+        unchanged: [],
+        unmatchedBaseline: baselineFindings
+          .slice(0, AI_MAX_UNMATCHED)
+          .map((finding, index) => ({ finding, index })),
+        unmatchedCurrent: currentFindings
+          .slice(0, AI_MAX_UNMATCHED)
+          .map((finding, index) => ({ finding, index })),
+      };
+      const limitedBaseline = aiInput.unmatchedBaseline.map((entry) => entry.finding);
+      const limitedCurrent = aiInput.unmatchedCurrent.map((entry) => entry.finding);
 
       let aiMatches = [];
-      let aiInfo = 'Deterministic-only (no unmatched findings).';
+      let aiInfo = 'AI-only comparison did not run because one side has no findings.';
 
       if (limitedBaseline.length > 0 && limitedCurrent.length > 0) {
         const prompt = buildAiPrompt(analysisType, limitedBaseline, limitedCurrent);
@@ -424,19 +428,15 @@ export default function ComparisonPage() {
             Number(match.baseline_index) < limitedBaseline.length &&
             Number(match.current_index) < limitedCurrent.length
           ));
-          aiInfo = `AI fallback processed ${limitedBaseline.length} x ${limitedCurrent.length} unmatched findings.${baselineTruncated || currentTruncated ? ' Additional unmatched findings remained deterministic-only.' : ''}`;
+          aiInfo = `AI-only processed ${limitedBaseline.length} baseline x ${limitedCurrent.length} current findings.`;
         } catch {
           aiMatches = [];
-          aiInfo = 'AI fallback unavailable; used deterministic-only diff.';
+          aiInfo = 'AI-only comparison unavailable; no semantic matches were applied.';
         }
       }
 
       const merged = mergeAiMatches(
-        {
-          unchanged: deterministic.unchanged,
-          unmatchedBaseline: deterministic.unmatchedBaseline,
-          unmatchedCurrent: deterministic.unmatchedCurrent,
-        },
+        aiInput,
         aiMatches,
         AI_CONFIDENCE_THRESHOLD
       );
@@ -567,7 +567,7 @@ export default function ComparisonPage() {
               {comparing ? 'Comparing...' : 'Compare Reports'}
             </button>
             <span style={styles.info}>
-              Uses deterministic matching first, then AI fallback for unmatched findings.
+              Uses AI-only semantic matching for all findings (test mode).
             </span>
           </div>
 
