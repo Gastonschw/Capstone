@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { supabase } from '../../lib/supabaseClient';
+import ModelInfoModal from './ModelInfoModal';
 
 const styles = {
   header: {
@@ -121,6 +122,22 @@ const styles = {
     background: 'transparent',
     borderColor: 'rgba(255,255,255,0.4)',
   },
+  infoBtn: {
+    width: '34px',
+    height: '34px',
+    borderRadius: '8px',
+    border: '1px solid rgba(255,255,255,0.35)',
+    backgroundColor: 'rgba(255,255,255,0.15)',
+    color: '#fff',
+    fontSize: '16px',
+    fontWeight: '700',
+    cursor: 'pointer',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+    fontFamily: 'inherit',
+  },
 };
 
 export default function Header({
@@ -136,6 +153,7 @@ export default function Header({
   supabaseConfigured = false,
 }) {
   const [signingIn, setSigningIn] = useState(false);
+  const [showModelInfo, setShowModelInfo] = useState(false);
   const hasModels = availableModels.length > 0;
 
   const handleSignIn = async () => {
@@ -199,25 +217,36 @@ export default function Header({
         <div style={styles.controls}>
           <div style={styles.controlGroup}>
             <label style={styles.controlLabel}>Chat Model</label>
-            <select
-              value={selectedModel}
-              onChange={(e) => onModelChange?.(e.target.value)}
-              style={{ ...styles.controlInput, ...styles.selectInput }}
-              disabled={modelsLoading || !hasModels}
-            >
-              {modelsLoading ? (
-                <option value="" style={styles.selectOption}>Loading models...</option>
-              ) : (
-                availableModels.map((model) => (
-                  <option key={model.id} value={model.id} style={styles.selectOption}>
-                    {model.name || model.id}
-                  </option>
-                ))
-              )}
-              {!modelsLoading && !hasModels && (
-                <option value="" style={styles.selectOption}>No models available</option>
-              )}
-            </select>
+            <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+              <select
+                value={selectedModel}
+                onChange={(e) => onModelChange?.(e.target.value)}
+                style={{ ...styles.controlInput, ...styles.selectInput, flex: 1 }}
+                disabled={modelsLoading || !hasModels}
+              >
+                {modelsLoading ? (
+                  <option value="" style={styles.selectOption}>Loading models...</option>
+                ) : (
+                  availableModels.map((model) => (
+                    <option key={model.id} value={model.id} style={styles.selectOption}>
+                      {model.name || model.id}
+                    </option>
+                  ))
+                )}
+                {!modelsLoading && !hasModels && (
+                  <option value="" style={styles.selectOption}>No models available</option>
+                )}
+              </select>
+              <button
+                type="button"
+                onClick={() => setShowModelInfo(true)}
+                style={styles.infoBtn}
+                title="Model pricing info"
+                aria-label="Model pricing info"
+              >
+                ?
+              </button>
+            </div>
             {modelsError && <span style={styles.errorText}>{modelsError}</span>}
           </div>
 
@@ -238,6 +267,9 @@ export default function Header({
           v1.0.0
         </div>
       </div>
+      {showModelInfo && (
+        <ModelInfoModal onClose={() => setShowModelInfo(false)} models={availableModels} />
+      )}
     </header>
   );
 }
