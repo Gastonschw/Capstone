@@ -2,7 +2,14 @@
 Pydantic schemas for request/response validation.
 """
 
-from .classes import ClassSummary, MyClassesResponse, ClassMemberItem, ClassMembersResponse
+from .classes import (
+    ClassSummary,
+    MyClassesResponse,
+    ClassMemberItem,
+    ClassMembersResponse,
+    ClassAdminItem,
+    ClassAdminsResponse,
+)
 from .repository import (
     RepositoryResponse,
     RepositoryListResponse,
@@ -26,6 +33,8 @@ __all__ = [
     "MyClassesResponse",
     "ClassMemberItem",
     "ClassMembersResponse",
+    "ClassAdminItem",
+    "ClassAdminsResponse",
     "RepositoryResponse",
     "RepositoryListResponse",
     "DiscoveredFileResponse",
