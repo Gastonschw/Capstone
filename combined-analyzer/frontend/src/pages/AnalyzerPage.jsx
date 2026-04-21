@@ -309,9 +309,10 @@ export default function AnalyzerPage() {
     if (!reportNode || typeof window === 'undefined') return;
 
     const title = `${activeReportTab || 'analysis'}-report`;
-    const printWindow = window.open('', '_blank', 'noopener,noreferrer,width=1200,height=800');
+    const printWindow = window.open('', '_blank', 'width=1200,height=800');
     if (!printWindow) return;
 
+    const html = reportNode.innerHTML;
     printWindow.document.write(`
       <!doctype html>
       <html>
@@ -322,19 +323,25 @@ export default function AnalyzerPage() {
             body { font-family: Arial, sans-serif; margin: 24px; color: #1a1a1a; }
             h1, h2, h3, h4, h5, h6 { page-break-after: avoid; }
             table { border-collapse: collapse; width: 100%; }
+            td, th { padding: 6px 10px; border: 1px solid #ddd; text-align: left; }
             img { max-width: 100%; height: auto; }
             * { box-sizing: border-box; }
+            @media print {
+              body { margin: 0; }
+              button, .no-print { display: none !important; }
+            }
           </style>
         </head>
         <body>
-          ${reportNode.innerHTML}
+          ${html}
         </body>
       </html>
     `);
     printWindow.document.close();
-    printWindow.focus();
-    printWindow.print();
-    printWindow.close();
+    setTimeout(() => {
+      printWindow.focus();
+      printWindow.print();
+    }, 250);
   };
 
   const renderContent = () => {
