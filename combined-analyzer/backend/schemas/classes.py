@@ -14,8 +14,9 @@ class ClassSummary(BaseModel):
     id: str
     name: str
     description: Optional[str] = None
-    join_code: Optional[str] = None  # Only returned for owners
+    join_code: Optional[str] = None  # Only returned for teachers of the class
     created_at: Optional[datetime] = None
+    is_creator: bool = False  # True when the current viewer created the class
 
 
 class MyClassesResponse(BaseModel):
@@ -37,4 +38,18 @@ class ClassMemberItem(BaseModel):
 
 class ClassMembersResponse(BaseModel):
     members: List[ClassMemberItem] = []
+
+
+class ClassAdminItem(BaseModel):
+    """An admin (teacher) of a class."""
+
+    user_id: str
+    email: Optional[str] = None
+    full_name: Optional[str] = None
+    is_creator: bool = False
+    added_at: Optional[datetime] = None
+
+
+class ClassAdminsResponse(BaseModel):
+    admins: List[ClassAdminItem] = []
 

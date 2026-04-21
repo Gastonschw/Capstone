@@ -410,6 +410,20 @@ export async function removeClassMember(classId, userId) {
   await api.delete(`/classes/${classId}/members/${userId}`);
 }
 
+export async function listClassAdmins(classId) {
+  const response = await api.get(`/classes/${classId}/admins`);
+  return response.data;
+}
+
+export async function promoteClassMember(classId, userId) {
+  const response = await api.post(`/classes/${classId}/admins/${userId}`);
+  return response.data;
+}
+
+export async function revokeClassAdmin(classId, userId) {
+  await api.delete(`/classes/${classId}/admins/${userId}`);
+}
+
 export async function sendChatMessage(
   analysisType,
   analysisId,

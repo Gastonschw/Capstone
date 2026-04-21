@@ -516,11 +516,6 @@ export default function RepositoryBrowser({ repositoryId, onBack, onAnalysisComp
     return status || 'Unknown';
   };
 
-  const openNewRunPanelFor = (type) => {
-    setShowNewRun(true);
-    setAnalysisTypes((prev) => ({ ...prev, [type]: true }));
-  };
-
   const handleViewLatest = async (type) => {
     const run = latestRuns[type];
     if (!run?.id) return;
@@ -889,6 +884,174 @@ export default function RepositoryBrowser({ repositoryId, onBack, onAnalysisComp
           </div>
         </div>
 
+        {showNewRun && (
+          <div style={styles.newRunPanel}>
+            <div style={styles.newRunHeader}>
+              <h3 style={styles.newRunTitle}>🧪 New run</h3>
+              <button type="button" style={styles.expanderButton} onClick={() => setShowNewRun(false)}>
+                Collapse
+              </button>
+            </div>
+
+            {(analysisTypes.erd || analysisTypes.integrity) && (
+              <div style={styles.content}>
+                {analysisTypes.erd && (
+                  <div style={styles.section}>
+                    <h3 style={styles.sectionTitle}>
+                      <span style={styles.sectionIcon}>&#128202;</span>
+                      ERD Analysis Files ({selectedErdCount} selected)
+                    </h3>
+                    <FileList
+                      files={erdFiles}
+                      selectionField="is_selected_erd"
+                      onToggle={handleFileToggle}
+                      onSelectAll={(selected) => handleSelectAll('erd', 'is_selected_erd', selected)}
+                      scoreField="confidence_score"
+                      scoreLabel="Confidence"
+                    />
+                  </div>
+                )}
+
+                {analysisTypes.integrity && (
+                  <div style={styles.section}>
+                    <h3 style={styles.sectionTitle}>
+                      <span style={styles.sectionIcon}>&#128274;</span>
+                      Code Analysis Files ({selectedIntegrityCount} selected for Integrity)
+                    </h3>
+                    <FileList
+                      files={integrityFiles}
+                      selectionField="is_selected_integrity"
+                      onToggle={handleFileToggle}
+                      onSelectAll={(selected) => handleSelectAll('integrity', 'is_selected_integrity', selected)}
+                      scoreField="relevance_score"
+                      scoreLabel="Relevance"
+                    />
+                  </div>
+                )}
+              </div>
+            )}
+
+            {(analysisTypes.compliance || analysisTypes.correctness || analysisTypes.usability || analysisTypes.maintainability) && (
+              <div style={{ ...styles.content, marginTop: '20px' }}>
+                {analysisTypes.compliance && (
+                  <div style={styles.section}>
+                    <h3 style={styles.sectionTitle}>
+                      <span style={styles.sectionIcon}>&#9989;</span>
+                      Compliance Files ({integrityFiles.filter((f) => f.is_selected_compliance).length} selected)
+                    </h3>
+                    <FileList
+                      files={integrityFiles}
+                      selectionField="is_selected_compliance"
+                      onToggle={handleFileToggle}
+                      onSelectAll={(selected) => handleSelectAll('integrity', 'is_selected_compliance', selected)}
+                      scoreField="relevance_score"
+                      scoreLabel="Relevance"
+                    />
+                  </div>
+                )}
+                {analysisTypes.correctness && (
+                  <div style={styles.section}>
+                    <h3 style={styles.sectionTitle}>
+                      <span style={styles.sectionIcon}>&#10004;</span>
+                      Correctness Files ({integrityFiles.filter((f) => f.is_selected_correctness).length} selected)
+                    </h3>
+                    <FileList
+                      files={integrityFiles}
+                      selectionField="is_selected_correctness"
+                      onToggle={handleFileToggle}
+                      onSelectAll={(selected) => handleSelectAll('integrity', 'is_selected_correctness', selected)}
+                      scoreField="relevance_score"
+                      scoreLabel="Relevance"
+                    />
+                  </div>
+                )}
+                {analysisTypes.usability && (
+                  <div style={styles.section}>
+                    <h3 style={styles.sectionTitle}>
+                      <span style={styles.sectionIcon}>&#128100;</span>
+                      Usability Files ({integrityFiles.filter((f) => f.is_selected_usability).length} selected)
+                    </h3>
+                    <FileList
+                      files={integrityFiles}
+                      selectionField="is_selected_usability"
+                      onToggle={handleFileToggle}
+                      onSelectAll={(selected) => handleSelectAll('integrity', 'is_selected_usability', selected)}
+                      scoreField="relevance_score"
+                      scoreLabel="Relevance"
+                    />
+                  </div>
+                )}
+                {analysisTypes.maintainability && (
+                  <div style={styles.section}>
+                    <h3 style={styles.sectionTitle}>
+                      <span style={styles.sectionIcon}>&#9881;</span>
+                      Maintainability Files ({integrityFiles.filter((f) => f.is_selected_maintainability).length} selected)
+                    </h3>
+                    <FileList
+                      files={integrityFiles}
+                      selectionField="is_selected_maintainability"
+                      onToggle={handleFileToggle}
+                      onSelectAll={(selected) => handleSelectAll('integrity', 'is_selected_maintainability', selected)}
+                      scoreField="relevance_score"
+                      scoreLabel="Relevance"
+                    />
+                  </div>
+                )}
+              </div>
+            )}
+
+            <div style={styles.analyzeSection}>
+              <AnalysisTypeSelector
+                analysisTypes={analysisTypes}
+                onChange={setAnalysisTypes}
+                canAnalyzeErd={canAnalyzeErd}
+                canAnalyzeIntegrity={canAnalyzeIntegrity}
+                canAnalyzeCompliance={canAnalyzeCompliance}
+                canAnalyzeCorrectness={canAnalyzeCorrectness}
+                canAnalyzeUsability={canAnalyzeUsability}
+                canAnalyzeMaintainability={canAnalyzeMaintainability}
+              />
+
+              <button
+                onClick={handleAnalyze}
+                disabled={!canAnalyze || analyzing}
+                style={{
+                  ...styles.analyzeButton,
+                  ...(!canAnalyze || analyzing ? styles.analyzeButtonDisabled : {}),
+                }}
+              >
+                {analyzing ? 'Analyzing...' : 'Start Analysis'}
+              </button>
+
+              {!canAnalyze && (
+                <p style={styles.hint}>
+                  {analysisTypes.erd && !canAnalyzeErd && (
+                    <>For ERD analysis, select at least one ERD image and one user story file. </>
+                  )}
+                  {analysisTypes.integrity && !canAnalyzeIntegrity && (
+                    <>For Integrity analysis, select at least one code or config file. </>
+                  )}
+                  {analysisTypes.compliance && !canAnalyzeCompliance && (
+                    <>For Compliance analysis, select code/config files below. </>
+                  )}
+                  {analysisTypes.correctness && !canAnalyzeCorrectness && (
+                    <>For Correctness analysis, select code/config files below. </>
+                  )}
+                  {analysisTypes.usability && !canAnalyzeUsability && (
+                    <>For Usability analysis, select code/config files below. </>
+                  )}
+                  {analysisTypes.maintainability && !canAnalyzeMaintainability && (
+                    <>For Maintainability analysis, select code/config files below. </>
+                  )}
+                  {!Object.values(analysisTypes).some(Boolean) && (
+                    <>Select an analysis type above to begin. </>
+                  )}
+                </p>
+              )}
+            </div>
+          </div>
+        )}
+
         <div style={styles.latestGrid}>
           {latestCards.map((c) => {
             const run = latestRuns[c.type];
@@ -945,15 +1108,6 @@ export default function RepositoryBrowser({ repositoryId, onBack, onAnalysisComp
                 </div>
 
                 <div style={styles.latestActions}>
-                  {!isCompleted && !isInProgress && (
-                    <button
-                      type="button"
-                      style={{ ...styles.smallButton, ...styles.primarySmallButton }}
-                      onClick={() => openNewRunPanelFor(c.type)}
-                    >
-                      Run
-                    </button>
-                  )}
                   {isCompleted && !isRunning && (
                     <button
                       style={styles.smallButton}
@@ -971,174 +1125,6 @@ export default function RepositoryBrowser({ repositoryId, onBack, onAnalysisComp
 
         {latestError && <div style={styles.latestError}>{latestError}</div>}
       </div>
-
-      {showNewRun && (
-        <div style={styles.newRunPanel}>
-          <div style={styles.newRunHeader}>
-            <h3 style={styles.newRunTitle}>🧪 New run</h3>
-            <button type="button" style={styles.expanderButton} onClick={() => setShowNewRun(false)}>
-              Collapse
-            </button>
-          </div>
-
-          {(analysisTypes.erd || analysisTypes.integrity) && (
-            <div style={styles.content}>
-              {analysisTypes.erd && (
-                <div style={styles.section}>
-                  <h3 style={styles.sectionTitle}>
-                    <span style={styles.sectionIcon}>&#128202;</span>
-                    ERD Analysis Files ({selectedErdCount} selected)
-                  </h3>
-                  <FileList
-                    files={erdFiles}
-                    selectionField="is_selected_erd"
-                    onToggle={handleFileToggle}
-                    onSelectAll={(selected) => handleSelectAll('erd', 'is_selected_erd', selected)}
-                    scoreField="confidence_score"
-                    scoreLabel="Confidence"
-                  />
-                </div>
-              )}
-
-              {analysisTypes.integrity && (
-                <div style={styles.section}>
-                  <h3 style={styles.sectionTitle}>
-                    <span style={styles.sectionIcon}>&#128274;</span>
-                    Code Analysis Files ({selectedIntegrityCount} selected for Integrity)
-                  </h3>
-                  <FileList
-                    files={integrityFiles}
-                    selectionField="is_selected_integrity"
-                    onToggle={handleFileToggle}
-                    onSelectAll={(selected) => handleSelectAll('integrity', 'is_selected_integrity', selected)}
-                    scoreField="relevance_score"
-                    scoreLabel="Relevance"
-                  />
-                </div>
-              )}
-            </div>
-          )}
-
-          {(analysisTypes.compliance || analysisTypes.correctness || analysisTypes.usability || analysisTypes.maintainability) && (
-            <div style={{ ...styles.content, marginTop: '20px' }}>
-              {analysisTypes.compliance && (
-                <div style={styles.section}>
-                  <h3 style={styles.sectionTitle}>
-                    <span style={styles.sectionIcon}>&#9989;</span>
-                    Compliance Files ({integrityFiles.filter((f) => f.is_selected_compliance).length} selected)
-                  </h3>
-                  <FileList
-                    files={integrityFiles}
-                    selectionField="is_selected_compliance"
-                    onToggle={handleFileToggle}
-                    onSelectAll={(selected) => handleSelectAll('integrity', 'is_selected_compliance', selected)}
-                    scoreField="relevance_score"
-                    scoreLabel="Relevance"
-                  />
-                </div>
-              )}
-              {analysisTypes.correctness && (
-                <div style={styles.section}>
-                  <h3 style={styles.sectionTitle}>
-                    <span style={styles.sectionIcon}>&#10004;</span>
-                    Correctness Files ({integrityFiles.filter((f) => f.is_selected_correctness).length} selected)
-                  </h3>
-                  <FileList
-                    files={integrityFiles}
-                    selectionField="is_selected_correctness"
-                    onToggle={handleFileToggle}
-                    onSelectAll={(selected) => handleSelectAll('integrity', 'is_selected_correctness', selected)}
-                    scoreField="relevance_score"
-                    scoreLabel="Relevance"
-                  />
-                </div>
-              )}
-              {analysisTypes.usability && (
-                <div style={styles.section}>
-                  <h3 style={styles.sectionTitle}>
-                    <span style={styles.sectionIcon}>&#128100;</span>
-                    Usability Files ({integrityFiles.filter((f) => f.is_selected_usability).length} selected)
-                  </h3>
-                  <FileList
-                    files={integrityFiles}
-                    selectionField="is_selected_usability"
-                    onToggle={handleFileToggle}
-                    onSelectAll={(selected) => handleSelectAll('integrity', 'is_selected_usability', selected)}
-                    scoreField="relevance_score"
-                    scoreLabel="Relevance"
-                  />
-                </div>
-              )}
-              {analysisTypes.maintainability && (
-                <div style={styles.section}>
-                  <h3 style={styles.sectionTitle}>
-                    <span style={styles.sectionIcon}>&#9881;</span>
-                    Maintainability Files ({integrityFiles.filter((f) => f.is_selected_maintainability).length} selected)
-                  </h3>
-                  <FileList
-                    files={integrityFiles}
-                    selectionField="is_selected_maintainability"
-                    onToggle={handleFileToggle}
-                    onSelectAll={(selected) => handleSelectAll('integrity', 'is_selected_maintainability', selected)}
-                    scoreField="relevance_score"
-                    scoreLabel="Relevance"
-                  />
-                </div>
-              )}
-            </div>
-          )}
-
-          <div style={styles.analyzeSection}>
-            <AnalysisTypeSelector
-              analysisTypes={analysisTypes}
-              onChange={setAnalysisTypes}
-              canAnalyzeErd={canAnalyzeErd}
-              canAnalyzeIntegrity={canAnalyzeIntegrity}
-              canAnalyzeCompliance={canAnalyzeCompliance}
-              canAnalyzeCorrectness={canAnalyzeCorrectness}
-              canAnalyzeUsability={canAnalyzeUsability}
-              canAnalyzeMaintainability={canAnalyzeMaintainability}
-            />
-
-            <button
-              onClick={handleAnalyze}
-              disabled={!canAnalyze || analyzing}
-              style={{
-                ...styles.analyzeButton,
-                ...(!canAnalyze || analyzing ? styles.analyzeButtonDisabled : {}),
-              }}
-            >
-              {analyzing ? 'Analyzing...' : 'Start Analysis'}
-            </button>
-
-            {!canAnalyze && (
-              <p style={styles.hint}>
-                {analysisTypes.erd && !canAnalyzeErd && (
-                  <>For ERD analysis, select at least one ERD image and one user story file. </>
-                )}
-                {analysisTypes.integrity && !canAnalyzeIntegrity && (
-                  <>For Integrity analysis, select at least one code or config file. </>
-                )}
-                {analysisTypes.compliance && !canAnalyzeCompliance && (
-                  <>For Compliance analysis, select code/config files below. </>
-                )}
-                {analysisTypes.correctness && !canAnalyzeCorrectness && (
-                  <>For Correctness analysis, select code/config files below. </>
-                )}
-                {analysisTypes.usability && !canAnalyzeUsability && (
-                  <>For Usability analysis, select code/config files below. </>
-                )}
-                {analysisTypes.maintainability && !canAnalyzeMaintainability && (
-                  <>For Maintainability analysis, select code/config files below. </>
-                )}
-                {!Object.values(analysisTypes).some(Boolean) && (
-                  <>Select an analysis type above to begin. </>
-                )}
-              </p>
-            )}
-          </div>
-        </div>
-      )}
     </div>
   );
 }

@@ -7,6 +7,9 @@ import {
   listClassMembers,
   removeClassMember,
   rotateClassJoinCode,
+  listClassAdmins,
+  promoteClassMember,
+  revokeClassAdmin,
 } from '../../api';
 import AppLoading from '../common/AppLoading';
 
@@ -294,6 +297,49 @@ const styles = {
     borderColor: '#fecaca',
     color: '#b91c1c',
   },
+  smallBtnPrimary: {
+    borderColor: '#1e3a5f',
+    color: '#1e3a5f',
+  },
+  adminRow: {
+    display: 'flex',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    gap: '8px',
+    padding: '6px 0',
+    fontSize: '13px',
+  },
+  adminMain: {
+    flex: '1 1 160px',
+    minWidth: 0,
+  },
+  creatorBadge: {
+    display: 'inline-block',
+    padding: '2px 8px',
+    borderRadius: '999px',
+    backgroundColor: '#e0e7ff',
+    color: '#3730a3',
+    fontSize: '11px',
+    fontWeight: 600,
+  },
+  adminBadge: {
+    display: 'inline-block',
+    padding: '2px 8px',
+    borderRadius: '999px',
+    backgroundColor: '#ecfccb',
+    color: '#3f6212',
+    fontSize: '11px',
+    fontWeight: 600,
+  },
+  subSectionHeader: {
+    fontSize: '11px',
+    fontWeight: 600,
+    color: '#6b7280',
+    marginBottom: '4px',
+    marginTop: '8px',
+    textTransform: 'uppercase',
+    letterSpacing: '0.04em',
+  },
   rosterSearchWrap: {
     marginBottom: '10px',
   },
@@ -431,6 +477,86 @@ function RemoveMemberModal({ pending, onCancel, onConfirm, loading }) {
   );
 }
 
+function PromoteMemberModal({ pending, onCancel, onConfirm, loading }) {
+  if (!pending) return null;
+
+  const { className, member } = pending;
+  const label = member.full_name || member.email || member.user_id;
+
+  return (
+    <div style={styles.modalBackdrop} role="dialog" aria-modal="true" aria-labelledby="promote-member-title">
+      <div style={styles.modal}>
+        <h3 id="promote-member-title" style={styles.modalTitle}>
+          Make this student an admin?
+        </h3>
+        <p style={styles.modalBody}>
+          Promote <span style={styles.modalHighlight}>{label}</span> to an admin of{' '}
+          <span style={styles.modalHighlight}>{className}</span>. They will be able to manage the roster and rotate the
+          join code. They will be moved out of the student roster but stay attached to the class as an admin.
+        </p>
+        <div style={styles.modalActions}>
+          <button
+            type="button"
+            style={{ ...styles.modalButton, ...styles.modalButtonSecondary }}
+            onClick={onCancel}
+            disabled={loading}
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            style={{ ...styles.modalButton, ...styles.modalButtonPrimary }}
+            onClick={onConfirm}
+            disabled={loading}
+          >
+            {loading ? 'Promoting…' : 'Make admin'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function RevokeAdminModal({ pending, onCancel, onConfirm, loading }) {
+  if (!pending) return null;
+
+  const { className, admin } = pending;
+  const label = admin.full_name || admin.email || admin.user_id;
+
+  return (
+    <div style={styles.modalBackdrop} role="dialog" aria-modal="true" aria-labelledby="revoke-admin-title">
+      <div style={styles.modal}>
+        <h3 id="revoke-admin-title" style={styles.modalTitle}>
+          Revoke admin access?
+        </h3>
+        <p style={styles.modalBody}>
+          Remove admin privileges for <span style={styles.modalHighlight}>{label}</span> in{' '}
+          <span style={styles.modalHighlight}>{className}</span>. They will stay enrolled in the class as a regular
+          student.
+        </p>
+        <div style={styles.modalActions}>
+          <button
+            type="button"
+            style={{ ...styles.modalButton, ...styles.modalButtonSecondary }}
+            onClick={onCancel}
+            disabled={loading}
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            style={{ ...styles.modalButton, ...styles.modalButtonDanger }}
+            onClick={onConfirm}
+            disabled={loading}
+          >
+            {loading ? 'Revoking…' : 'Revoke admin'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function DeleteClassModal({ classToDelete, onCancel, onConfirm, loading }) {
   if (!classToDelete) return null;
 
@@ -491,6 +617,12 @@ export default function ClassesPanel() {
   const [removeMemberLoading, setRemoveMemberLoading] = useState(false);
   const [joinCodeRotateClass, setJoinCodeRotateClass] = useState(null);
   const [joinCodeRotateLoading, setJoinCodeRotateLoading] = useState(false);
+  const [adminsByClass, setAdminsByClass] = useState({});
+  const [adminsLoading, setAdminsLoading] = useState({});
+  const [promotePending, setPromotePending] = useState(null);
+  const [promoteLoading, setPromoteLoading] = useState(false);
+  const [revokePending, setRevokePending] = useState(null);
+  const [revokeLoading, setRevokeLoading] = useState(false);
 
   useEffect(() => {
     if (!statusMessage) return;
@@ -565,8 +697,7 @@ export default function ClassesPanel() {
     }
   };
 
-  const ensureRosterLoaded = async (classId) => {
-    if (rosterByClass[classId]) return;
+  const loadRoster = async (classId) => {
     setRosterLoading((m) => ({ ...m, [classId]: true }));
     try {
       const data = await listClassMembers(classId);
@@ -576,6 +707,28 @@ export default function ClassesPanel() {
       showStatus(err?.response?.data?.detail || 'Could not load class roster.', 'error');
     } finally {
       setRosterLoading((m) => ({ ...m, [classId]: false }));
+    }
+  };
+
+  const loadAdmins = async (classId) => {
+    setAdminsLoading((m) => ({ ...m, [classId]: true }));
+    try {
+      const data = await listClassAdmins(classId);
+      setAdminsByClass((prev) => ({ ...prev, [classId]: data.admins || [] }));
+    } catch (err) {
+      console.error('Load admins failed', err);
+      showStatus(err?.response?.data?.detail || 'Could not load class admins.', 'error');
+    } finally {
+      setAdminsLoading((m) => ({ ...m, [classId]: false }));
+    }
+  };
+
+  const ensureRosterLoaded = async (classId) => {
+    if (!rosterByClass[classId]) {
+      await loadRoster(classId);
+    }
+    if (!adminsByClass[classId]) {
+      await loadAdmins(classId);
     }
   };
 
@@ -595,6 +748,14 @@ export default function ClassesPanel() {
 
   const openRemoveMemberModal = (classId, className, member) => {
     setMemberRemovePending({ classId, className, member });
+  };
+
+  const openPromoteMemberModal = (classId, className, member) => {
+    setPromotePending({ classId, className, member });
+  };
+
+  const openRevokeAdminModal = (classId, className, admin) => {
+    setRevokePending({ classId, className, admin });
   };
 
   const roleLabel = role === 'admin' ? 'Admin (Teacher)' : 'General User (Student)';
@@ -620,43 +781,45 @@ export default function ClassesPanel() {
 
       {!loading ? (
       <div style={styles.content}>
-        {role === 'admin' && (
+        {(role === 'admin' || teaching.length > 0) && (
           <div style={styles.column}>
-          <div style={styles.columnTitle}>Create a class</div>
-          <p style={styles.helperText}>
-            Teachers (admins) can create classes and share the 6-digit join code with students.
-          </p>
-          <form onSubmit={handleCreateClass}>
-            <div style={styles.formGroup}>
-              <input
-                type="text"
-                placeholder="Class name (e.g., CSCE 606 – Spring)"
-                value={newClassName}
-                onChange={(e) => setNewClassName(e.target.value)}
-                style={styles.input}
-              />
-            </div>
-            <div style={styles.formGroup}>
-              <input
-                type="text"
-                placeholder="Optional description"
-                value={newClassDescription}
-                onChange={(e) => setNewClassDescription(e.target.value)}
-                style={styles.input}
-              />
-              <button type="submit" style={styles.button}>
-                Create Class
-              </button>
-            </div>
-          </form>
+          {role === 'admin' && (
+            <>
+              <div style={styles.columnTitle}>Create a class</div>
+              <p style={styles.helperText}>
+                Teachers (admins) can create classes and share the 6-digit join code with students.
+              </p>
+              <form onSubmit={handleCreateClass}>
+                <div style={styles.formGroup}>
+                  <input
+                    type="text"
+                    placeholder="Class name (e.g., CSCE 606 – Spring)"
+                    value={newClassName}
+                    onChange={(e) => setNewClassName(e.target.value)}
+                    style={styles.input}
+                  />
+                </div>
+                <div style={styles.formGroup}>
+                  <input
+                    type="text"
+                    placeholder="Optional description"
+                    value={newClassDescription}
+                    onChange={(e) => setNewClassDescription(e.target.value)}
+                    style={styles.input}
+                  />
+                  <button type="submit" style={styles.button}>
+                    Create Class
+                  </button>
+                </div>
+              </form>
+            </>
+          )}
 
           <div style={styles.list}>
             <div style={styles.listHeader}>My Classes (Teaching)</div>
             {teaching.length === 0 ? (
               <p style={styles.helperText}>
-                {role === 'admin'
-                  ? 'You have not created any classes yet. When you create one, it will appear here with its join code.'
-                  : 'Sign in as an admin to create and manage classes.'}
+                You have not created any classes yet. When you create one, it will appear here with its join code.
               </p>
             ) : (
               teaching.map((cls) => (
@@ -703,20 +866,55 @@ export default function ClassesPanel() {
                       >
                         New join code
                       </button>
-                      <button
-                        type="button"
-                        style={{ ...styles.copyButton, color: '#b91c1c' }}
-                        onClick={() => setClassToDelete(cls)}
-                      >
-                        Delete class
-                      </button>
+                      {cls.is_creator && (
+                        <button
+                          type="button"
+                          style={{ ...styles.copyButton, color: '#b91c1c' }}
+                          onClick={() => setClassToDelete(cls)}
+                        >
+                          Delete class
+                        </button>
+                      )}
                       <button type="button" style={styles.rosterToggle} onClick={() => toggleRoster(cls.id)}>
-                        {expandedClassId === cls.id ? 'Hide roster' : 'Roster'}
+                        {expandedClassId === cls.id ? 'Hide class details' : 'Manage class'}
                       </button>
                     </div>
                   </div>
                   {expandedClassId === cls.id ? (
                     <div style={styles.rosterBlock}>
+                      <div style={styles.subSectionHeader}>Class admins</div>
+                      {adminsLoading[cls.id] ? (
+                        <p style={styles.helperText}>Loading admins…</p>
+                      ) : (() => {
+                          const admins = adminsByClass[cls.id] || [];
+                          if (admins.length === 0) {
+                            return <p style={styles.helperText}>No admins yet.</p>;
+                          }
+                          return admins.map((a) => (
+                            <div key={a.user_id} style={styles.adminRow}>
+                              <div style={styles.adminMain}>
+                                <strong>{a.full_name || a.email || a.user_id}</strong>
+                                {a.email && a.full_name ? (
+                                  <div style={styles.classMeta}>{a.email}</div>
+                                ) : null}
+                              </div>
+                              <span style={a.is_creator ? styles.creatorBadge : styles.adminBadge}>
+                                {a.is_creator ? 'Creator' : 'Admin'}
+                              </span>
+                              {cls.is_creator && !a.is_creator ? (
+                                <button
+                                  type="button"
+                                  style={{ ...styles.smallBtn, ...styles.smallBtnDanger }}
+                                  onClick={() => openRevokeAdminModal(cls.id, cls.name, a)}
+                                >
+                                  Revoke admin
+                                </button>
+                              ) : null}
+                            </div>
+                          ));
+                        })()}
+
+                      <div style={styles.subSectionHeader}>Student roster</div>
                       {rosterLoading[cls.id] ? (
                         <p style={styles.helperText}>Loading roster…</p>
                       ) : (() => {
@@ -767,6 +965,15 @@ export default function ClassesPanel() {
                                     >
                                       View recent runs
                                     </button>
+                                    {cls.is_creator ? (
+                                      <button
+                                        type="button"
+                                        style={{ ...styles.smallBtn, ...styles.smallBtnPrimary }}
+                                        onClick={() => openPromoteMemberModal(cls.id, cls.name, m)}
+                                      >
+                                        Make admin
+                                      </button>
+                                    ) : null}
                                     <button
                                       type="button"
                                       style={{ ...styles.smallBtn, ...styles.smallBtnDanger }}
@@ -861,6 +1068,85 @@ export default function ClassesPanel() {
           } finally {
             setRemoveMemberLoading(false);
             setMemberRemovePending(null);
+          }
+        }}
+      />
+      <PromoteMemberModal
+        pending={promotePending}
+        loading={promoteLoading}
+        onCancel={() => {
+          if (promoteLoading) return;
+          setPromotePending(null);
+        }}
+        onConfirm={async () => {
+          if (!promotePending) return;
+          const { classId, member } = promotePending;
+          try {
+            setPromoteLoading(true);
+            const newAdmin = await promoteClassMember(classId, member.user_id);
+            setRosterByClass((prev) => ({
+              ...prev,
+              [classId]: (prev[classId] || []).filter((x) => x.user_id !== member.user_id),
+            }));
+            setAdminsByClass((prev) => {
+              const existing = prev[classId] || [];
+              if (existing.some((a) => a.user_id === newAdmin.user_id)) {
+                return prev;
+              }
+              return { ...prev, [classId]: [...existing, { ...newAdmin, is_creator: false }] };
+            });
+            showStatus('Student is now an admin of this class.', 'success');
+          } catch (err) {
+            console.error('Promote member failed', err);
+            showStatus(err?.response?.data?.detail || 'Could not promote this member.', 'error');
+          } finally {
+            setPromoteLoading(false);
+            setPromotePending(null);
+          }
+        }}
+      />
+      <RevokeAdminModal
+        pending={revokePending}
+        loading={revokeLoading}
+        onCancel={() => {
+          if (revokeLoading) return;
+          setRevokePending(null);
+        }}
+        onConfirm={async () => {
+          if (!revokePending) return;
+          const { classId, admin } = revokePending;
+          try {
+            setRevokeLoading(true);
+            await revokeClassAdmin(classId, admin.user_id);
+            setAdminsByClass((prev) => ({
+              ...prev,
+              [classId]: (prev[classId] || []).filter((a) => a.user_id !== admin.user_id),
+            }));
+            setRosterByClass((prev) => {
+              const existing = prev[classId] || [];
+              if (existing.some((m) => m.user_id === admin.user_id)) {
+                return prev;
+              }
+              return {
+                ...prev,
+                [classId]: [
+                  ...existing,
+                  {
+                    user_id: admin.user_id,
+                    email: admin.email,
+                    full_name: admin.full_name,
+                    joined_at: null,
+                  },
+                ],
+              };
+            });
+            showStatus('Admin access revoked. The user is back to student status.', 'success');
+          } catch (err) {
+            console.error('Revoke admin failed', err);
+            showStatus(err?.response?.data?.detail || 'Could not revoke admin access.', 'error');
+          } finally {
+            setRevokeLoading(false);
+            setRevokePending(null);
           }
         }}
       />

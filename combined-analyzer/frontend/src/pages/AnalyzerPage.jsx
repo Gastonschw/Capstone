@@ -61,6 +61,21 @@ const styles = {
     gap: '12px',
     marginBottom: '20px',
   },
+  reportActionsRow: {
+    display: 'flex',
+    justifyContent: 'flex-end',
+    marginBottom: '12px',
+  },
+  exportButton: {
+    padding: '8px 14px',
+    borderRadius: '8px',
+    border: '1px solid #1e3a5f',
+    backgroundColor: '#fff',
+    color: '#1e3a5f',
+    fontSize: '13px',
+    fontWeight: 600,
+    cursor: 'pointer',
+  },
   tab: {
     padding: '10px 20px',
     border: 'none',
@@ -112,6 +127,7 @@ export default function AnalyzerPage() {
   const [authUser, setAuthUser] = useState(null);
   const [authLoading, setAuthLoading] = useState(isSupabaseConfigured);
   const modelsDebounceIsFirst = useRef(true);
+  const reportExportRef = useRef(null);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -288,6 +304,39 @@ export default function AnalyzerPage() {
     loadRepositories();
   };
 
+  const handleDownloadPdf = () => {
+    const reportNode = reportExportRef.current;
+    if (!reportNode || typeof window === 'undefined') return;
+
+    const title = `${activeReportTab || 'analysis'}-report`;
+    const printWindow = window.open('', '_blank', 'noopener,noreferrer,width=1200,height=800');
+    if (!printWindow) return;
+
+    printWindow.document.write(`
+      <!doctype html>
+      <html>
+        <head>
+          <meta charset="utf-8" />
+          <title>${title}</title>
+          <style>
+            body { font-family: Arial, sans-serif; margin: 24px; color: #1a1a1a; }
+            h1, h2, h3, h4, h5, h6 { page-break-after: avoid; }
+            table { border-collapse: collapse; width: 100%; }
+            img { max-width: 100%; height: auto; }
+            * { box-sizing: border-box; }
+          </style>
+        </head>
+        <body>
+          ${reportNode.innerHTML}
+        </body>
+      </html>
+    `);
+    printWindow.document.close();
+    printWindow.focus();
+    printWindow.print();
+    printWindow.close();
+  };
+
   const renderContent = () => {
     switch (view) {
       case 'upload':
@@ -361,13 +410,22 @@ export default function AnalyzerPage() {
                 </button>
               ))}
             </div>
+            {activeAnalysis && (
+              <div style={styles.reportActionsRow}>
+                <button type="button" style={styles.exportButton} onClick={handleDownloadPdf}>
+                  Download PDF
+                </button>
+              </div>
+            )}
             {activeAnalysis ? (
-              <ActiveReport
-                analysisId={activeAnalysis.id}
-                onBack={handleBackToRepository}
-                chatModel={chatModel}
-                chatApiKey={chatApiKey}
-              />
+              <div ref={reportExportRef}>
+                <ActiveReport
+                  analysisId={activeAnalysis.id}
+                  onBack={handleBackToRepository}
+                  chatModel={chatModel}
+                  chatApiKey={chatApiKey}
+                />
+              </div>
             ) : (
               <div style={{ textAlign: 'center', padding: '40px', color: '#666' }}>
                 <p>No {activeReportTab} analysis results available.</p>

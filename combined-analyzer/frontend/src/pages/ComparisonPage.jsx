@@ -567,7 +567,7 @@ export default function ComparisonPage() {
               {comparing ? 'Comparing...' : 'Compare Reports'}
             </button>
             <span style={styles.info}>
-              Uses AI-only semantic matching for all findings (test mode).
+              Uses AI-only semantic matching for all findings.
             </span>
           </div>
 
