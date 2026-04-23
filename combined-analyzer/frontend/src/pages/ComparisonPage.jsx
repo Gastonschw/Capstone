@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   ISO_ANALYSIS_LABELS,
   ISO_ANALYSIS_TYPES,
@@ -271,6 +271,20 @@ function sendChatAndCollect(analysisType, analysisId, message, model, apiKey) {
 
 export default function ComparisonPage() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const inspectCtx = useMemo(() => {
+    const c = searchParams.get('inspectClass');
+    const s = searchParams.get('inspectStudent');
+    const n = searchParams.get('inspectName');
+    if (c && s) {
+      return {
+        classId: c,
+        studentId: s,
+        label: n ? decodeURIComponent(n) : 'Student',
+      };
+    }
+    return null;
+  }, [searchParams]);
   const [repositories, setRepositories] = useState([]);
   const [repoLoading, setRepoLoading] = useState(true);
   const [error, setError] = useState('');
@@ -291,13 +305,26 @@ export default function ComparisonPage() {
 
   const chatApiKey = readFromStorage(CHAT_API_KEY_STORAGE, '');
   const chatModel = readFromStorage(CHAT_MODEL_STORAGE, DEFAULT_CHAT_MODEL);
+  const analyzerPath = useMemo(() => {
+    if (!inspectCtx) return '/analyzer';
+    const params = new URLSearchParams({
+      inspectClass: inspectCtx.classId,
+      inspectStudent: inspectCtx.studentId,
+    });
+    if (inspectCtx.label) {
+      params.set('inspectName', inspectCtx.label);
+    }
+    return `/analyzer?${params.toString()}`;
+  }, [inspectCtx]);
 
   useEffect(() => {
     const load = async () => {
       setRepoLoading(true);
       setError('');
       try {
-        const repos = await listRepositories();
+        const repos = inspectCtx
+          ? await listRepositories({ classId: inspectCtx.classId, studentUserId: inspectCtx.studentId })
+          : await listRepositories();
         setRepositories(Array.isArray(repos) ? repos : []);
       } catch (err) {
         setError('Failed to load repositories.');
@@ -306,7 +333,7 @@ export default function ComparisonPage() {
       }
     };
     load();
-  }, []);
+  }, [inspectCtx]);
 
   useEffect(() => {
     const loadBaselineRuns = async () => {
@@ -468,10 +495,12 @@ export default function ComparisonPage() {
             <div>
               <h1 style={styles.title}>Report Comparison</h1>
               <p style={styles.subtitle}>
-                Select baseline and current repositories, then compare completed ISO reports side-by-side.
+                {inspectCtx
+                  ? `Viewing repositories for ${inspectCtx.label}. Select baseline and current repositories, then compare completed ISO reports side-by-side.`
+                  : 'Select baseline and current repositories, then compare completed ISO reports side-by-side.'}
               </p>
             </div>
-            <button style={styles.backButton} onClick={() => navigate('/analyzer')}>
+            <button style={styles.backButton} onClick={() => navigate(analyzerPath)}>
               Back to Analyzer
             </button>
           </div>

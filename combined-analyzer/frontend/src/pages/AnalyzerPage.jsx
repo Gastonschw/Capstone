@@ -148,9 +148,15 @@ export default function AnalyzerPage() {
         if (!inspectCtx) {
           const repos = await listRepositories();
           if (cancelled) return;
-          setRepositories(Array.isArray(repos) ? repos : []);
-          setSelectedRepo(null);
-          setView('upload');
+          const list = Array.isArray(repos) ? repos : [];
+          setRepositories(list);
+          setSelectedRepo((prevSelected) => {
+            if (!prevSelected?.id) return prevSelected;
+            const refreshed = list.find((repo) => repo.id === prevSelected.id);
+            if (refreshed) return refreshed;
+            setView('upload');
+            return null;
+          });
           return;
         }
         const repos = await listRepositories({
@@ -467,7 +473,20 @@ export default function AnalyzerPage() {
           repositoriesLoading={repositoriesLoading}
           selectedRepo={selectedRepo}
           onRepositorySelect={handleRepositorySelect}
-          onOpenComparison={() => navigate('/compare')}
+          onOpenComparison={() => {
+            if (inspectCtx) {
+              const params = new URLSearchParams({
+                inspectClass: inspectCtx.classId,
+                inspectStudent: inspectCtx.studentId,
+              });
+              if (inspectCtx.label) {
+                params.set('inspectName', inspectCtx.label);
+              }
+              navigate(`/compare?${params.toString()}`);
+              return;
+            }
+            navigate('/compare');
+          }}
           onNewAnalysis={() => {
             setSelectedRepo(null);
             setView('upload');
