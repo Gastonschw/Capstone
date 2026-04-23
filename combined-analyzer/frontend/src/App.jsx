@@ -43,7 +43,9 @@ export default function App() {
       return;
     }
     let cancelled = false;
-    setClassGate({ status: 'loading' });
+    // Only show the full-screen gate during the first class lookup.
+    // Later refreshes should not unmount the current page tree.
+    setClassGate((prev) => (prev.status === 'idle' ? { status: 'loading' } : prev));
     listMyClasses()
       .then((data) => {
         if (cancelled) return;
@@ -69,7 +71,7 @@ export default function App() {
   useEffect(() => {
     const onClassesRefresh = () => {
       if (!authUser || !isSupabaseConfigured || authLoading) return;
-      setClassGate({ status: 'loading' });
+      setClassGate((prev) => (prev.status === 'idle' ? { status: 'loading' } : prev));
       listMyClasses()
         .then((data) => {
           const role = data.role || 'general';
