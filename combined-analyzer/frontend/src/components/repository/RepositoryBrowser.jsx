@@ -901,6 +901,9 @@ export default function RepositoryBrowser({ repositoryId, onBack, onAnalysisComp
                       <span style={styles.sectionIcon}>&#128202;</span>
                       ERD Analysis Files ({selectedErdCount} selected)
                     </h3>
+                    <p style={{ fontSize: '13px', color: '#666', margin: '0 0 12px 0' }}>
+                      Select your ERD images and user story files. High-confidence matches are pre-selected.
+                    </p>
                     <FileList
                       files={erdFiles}
                       selectionField="is_selected_erd"

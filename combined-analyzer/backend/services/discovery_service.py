@@ -467,29 +467,41 @@ async def run_file_discovery(
     # Step 3: Save all discovered files to database
     saved_files = []
 
-    # Save ERD images
-    for candidate in discovered_erd['erd_images']:
+    # Build lookup of AI-boosted confidence scores keyed by path
+    ai_erd_scores = {c.path: c.confidence for c in discovered_erd['erd_images']}
+    ai_story_scores = {c.path: c.confidence for c in discovered_erd['user_story_files']}
+    ai_story_previews = {
+        c.path: c.preview for c in discovered_erd['user_story_files'] if c.preview
+    }
+
+    # Save ALL image files as erd_image, using AI score when available,
+    # heuristic score otherwise. Auto-select only high-confidence ones.
+    for img in sorted(files['images'], key=lambda x: ai_erd_scores.get(x['path'], x['confidence']), reverse=True)[:50]:
+        score = ai_erd_scores.get(img['path'], img['confidence'])
         db_file = DiscoveredFile(
             repository_id=repository_id,
-            file_path=candidate.path,
-            file_type=candidate.file_type,
-            confidence_score=candidate.confidence,
-            is_selected_erd=candidate.confidence >= ERD_AUTO_SELECT_MIN_CONFIDENCE,
-            is_selected_integrity=False
+            file_path=img['path'],
+            file_type=FileType.erd_image.value,
+            confidence_score=score,
+            is_selected_erd=score >= ERD_AUTO_SELECT_MIN_CONFIDENCE,
+            is_selected_integrity=False,
         )
         db.add(db_file)
         saved_files.append(db_file)
 
-    # Save user story files
-    for candidate in discovered_erd['user_story_files']:
+    # Save ALL text files as user_story, using AI score when available,
+    # heuristic score otherwise. Auto-select only high-confidence ones.
+    for txt in sorted(files['text_files'], key=lambda x: ai_story_scores.get(x['path'], x['confidence']), reverse=True)[:50]:
+        score = ai_story_scores.get(txt['path'], txt['confidence'])
+        preview = ai_story_previews.get(txt['path'], txt.get('preview', '')[:500] if txt.get('preview') else None)
         db_file = DiscoveredFile(
             repository_id=repository_id,
-            file_path=candidate.path,
-            file_type=candidate.file_type,
-            confidence_score=candidate.confidence,
-            content_preview=candidate.preview,
-            is_selected_erd=candidate.confidence >= ERD_AUTO_SELECT_MIN_CONFIDENCE,
-            is_selected_integrity=False
+            file_path=txt['path'],
+            file_type=FileType.user_story.value,
+            confidence_score=score,
+            content_preview=preview,
+            is_selected_erd=score >= ERD_AUTO_SELECT_MIN_CONFIDENCE,
+            is_selected_integrity=False,
         )
         db.add(db_file)
         saved_files.append(db_file)
@@ -543,8 +555,8 @@ async def run_file_discovery(
     await db.commit()
 
     return {
-        "erd_images_found": len(discovered_erd['erd_images']),
-        "user_story_files_found": len(discovered_erd['user_story_files']),
+        "erd_images_found": len([f for f in saved_files if f.file_type == FileType.erd_image.value]),
+        "user_story_files_found": len([f for f in saved_files if f.file_type == FileType.user_story.value]),
         "code_files_found": len([f for f in saved_files if f.file_type == FileType.code.value]),
         "config_files_found": len([f for f in saved_files if f.file_type == FileType.config.value]),
         "total_files_scanned": sum(len(v) for v in files.values())
