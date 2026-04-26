@@ -121,15 +121,6 @@ const styles = {
     fontSize: '32px',
     marginBottom: '8px',
   },
-  reclassifySelect: {
-    fontSize: '11px',
-    padding: '3px 6px',
-    borderRadius: '4px',
-    border: '1px solid #d0d7de',
-    backgroundColor: '#f8f9fa',
-    cursor: 'pointer',
-    color: '#333',
-  },
 };
 
 function getScoreStyle(score) {
@@ -148,7 +139,7 @@ function getFileTypeLabel(fileType) {
   return labels[fileType] || fileType;
 }
 
-export default function FileList({ files, selectionField, onToggle, onSelectAll, scoreField, scoreLabel, onReclassify }) {
+export default function FileList({ files, selectionField, onToggle, onSelectAll, scoreField, scoreLabel }) {
   const [searchValue, setSearchValue] = useState('');
 
   if (!files || files.length === 0) {
@@ -235,19 +226,6 @@ export default function FileList({ files, selectionField, onToggle, onSelectAll,
                 <span style={{ ...styles.badge, ...styles.scoreBadge, ...getScoreStyle(file[scoreField]) }}>
                   {file[scoreField]}% {scoreLabel}
                 </span>
-                {onReclassify && (
-                  <select
-                    style={styles.reclassifySelect}
-                    value={file.file_type}
-                    onChange={(e) => onReclassify(file.id, e.target.value)}
-                  >
-                    <option value="erd_image">ERD Image</option>
-                    <option value="user_story">User Story</option>
-                    <option value="code">Code</option>
-                    <option value="config">Config</option>
-                    <option value="other">Other</option>
-                  </select>
-                )}
               </div>
               {file.content_preview && (
                 <div style={styles.preview}>{file.content_preview}</div>

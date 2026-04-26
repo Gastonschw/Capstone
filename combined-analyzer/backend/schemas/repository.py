@@ -66,8 +66,3 @@ class FileSelectionUpdate(BaseModel):
     file_ids: List[int]
     is_selected: bool
     analysis_type: str  # 'erd', 'integrity', 'compliance', 'correctness', 'usability', 'maintainability'
-
-
-class FileTypeUpdate(BaseModel):
-    """Request schema for changing a discovered file's type."""
-    file_type: str  # 'erd_image', 'user_story', 'code', 'config', 'other'

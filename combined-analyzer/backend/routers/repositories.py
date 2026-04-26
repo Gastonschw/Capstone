@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from database import get_db
 from dependencies import get_optional_user_id
-from models.repository import Repository, DiscoveredFile, FileType
+from models.repository import Repository, DiscoveredFile
 from models.classroom import Class, ClassMember
 from models.erd_analysis import ERDAnalysis
 from models.integrity_analysis import IntegrityAnalysis
@@ -21,7 +21,6 @@ from schemas.repository import (
     RepositoryResponse,
     RepositoryListResponse,
     FileSelectionUpdate,
-    FileTypeUpdate,
 )
 from services.folder_service import delete_repository_files
 from services.discovery_service import run_discovery_only
@@ -231,40 +230,6 @@ async def update_file_selection(
     await db.commit()
 
     return {"message": f"Updated {len(files)} files for {update.analysis_type} analysis"}
-
-
-@router.put("/repository/{repository_id}/files/{file_id}/type")
-async def update_file_type(
-    repository_id: int,
-    file_id: int,
-    update: FileTypeUpdate,
-    request: Request,
-    db: AsyncSession = Depends(get_db),
-):
-    """Change a discovered file's type (e.g. reclassify 'other' as 'erd_image')."""
-    await require_repository_access(request, db, repository_id)
-
-    valid_types = {ft.value for ft in FileType}
-    if update.file_type not in valid_types:
-        raise HTTPException(
-            status_code=400,
-            detail=f"file_type must be one of: {', '.join(sorted(valid_types))}",
-        )
-
-    result = await db.execute(
-        select(DiscoveredFile).where(
-            DiscoveredFile.repository_id == repository_id,
-            DiscoveredFile.id == file_id,
-        )
-    )
-    db_file = result.scalar_one_or_none()
-    if not db_file:
-        raise HTTPException(status_code=404, detail="File not found")
-
-    db_file.file_type = update.file_type
-    await db.commit()
-
-    return {"message": f"File type updated to {update.file_type}", "file_id": file_id}
 
 
 @router.post("/repository/{repository_id}/rediscover")

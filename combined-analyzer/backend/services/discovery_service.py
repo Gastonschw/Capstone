@@ -540,44 +540,6 @@ async def run_file_discovery(
         db.add(db_file)
         saved_files.append(db_file)
 
-    # Save remaining image files as 'other' so users can manually reclassify them.
-    # Skip images already saved as erd_image above.
-    saved_erd_paths = {c.path for c in discovered_erd['erd_images']}
-    remaining_images = [
-        img for img in sorted(files['images'], key=lambda x: x['confidence'], reverse=True)
-        if img['path'] not in saved_erd_paths
-    ][:30]
-    for img in remaining_images:
-        db_file = DiscoveredFile(
-            repository_id=repository_id,
-            file_path=img['path'],
-            file_type=FileType.other.value,
-            confidence_score=img['confidence'],
-            is_selected_erd=False,
-            is_selected_integrity=False,
-        )
-        db.add(db_file)
-        saved_files.append(db_file)
-
-    # Save remaining text files as 'other' so users can manually reclassify them.
-    saved_story_paths = {c.path for c in discovered_erd['user_story_files']}
-    remaining_texts = [
-        txt for txt in sorted(files['text_files'], key=lambda x: x['confidence'], reverse=True)
-        if txt['path'] not in saved_story_paths
-    ][:30]
-    for txt in remaining_texts:
-        db_file = DiscoveredFile(
-            repository_id=repository_id,
-            file_path=txt['path'],
-            file_type=FileType.other.value,
-            confidence_score=txt['confidence'],
-            content_preview=txt.get('preview', '')[:500] if txt.get('preview') else None,
-            is_selected_erd=False,
-            is_selected_integrity=False,
-        )
-        db.add(db_file)
-        saved_files.append(db_file)
-
     await db.commit()
 
     return {

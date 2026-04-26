@@ -83,13 +83,6 @@ export async function updateFileSelection(repositoryId, fileIds, isSelected, ana
   return response.data;
 }
 
-export async function updateFileType(repositoryId, fileId, newType) {
-  const response = await api.put(`/repository/${repositoryId}/files/${fileId}/type`, {
-    file_type: newType,
-  });
-  return response.data;
-}
-
 export async function rediscoverFiles(repositoryId) {
   const response = await api.post(`/repository/${repositoryId}/rediscover`);
   return response.data;
