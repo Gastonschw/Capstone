@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import {
   getRepository,
   updateFileSelection,
+  updateFileType,
   rediscoverFiles,
   deleteRepository,
   startERDAnalysis,
@@ -390,6 +391,7 @@ export default function RepositoryBrowser({ repositoryId, onBack, onAnalysisComp
     erd: false, integrity: false, compliance: false, correctness: false,
     usability: false, maintainability: false,
   });
+  const [showOtherFiles, setShowOtherFiles] = useState(false);
 
   const loadRepository = async () => {
     setLoading(true);
@@ -663,6 +665,20 @@ export default function RepositoryBrowser({ repositoryId, onBack, onAnalysisComp
     }
   };
 
+  const handleReclassify = async (fileId, newType) => {
+    try {
+      await updateFileType(repositoryId, fileId, newType);
+      setRepository((prev) => ({
+        ...prev,
+        discovered_files: prev.discovered_files.map((f) =>
+          f.id === fileId ? { ...f, file_type: newType } : f
+        ),
+      }));
+    } catch (err) {
+      setError('Failed to reclassify file');
+    }
+  };
+
   const handleRefresh = async () => {
     setRefreshing(true);
     setError(null);
@@ -775,6 +791,9 @@ export default function RepositoryBrowser({ repositoryId, onBack, onAnalysisComp
   ) || [];
   const integrityFiles = repository.discovered_files?.filter(
     (f) => f.file_type === 'code' || f.file_type === 'config'
+  ) || [];
+  const otherFiles = repository.discovered_files?.filter(
+    (f) => f.file_type === 'other'
   ) || [];
 
   const selectedErdCount = erdFiles.filter((f) => f.is_selected_erd).length;
@@ -994,6 +1013,35 @@ export default function RepositoryBrowser({ repositoryId, onBack, onAnalysisComp
                       onSelectAll={(selected) => handleSelectAll('integrity', 'is_selected_maintainability', selected)}
                       scoreField="relevance_score"
                       scoreLabel="Relevance"
+                    />
+                  </div>
+                )}
+              </div>
+            )}
+
+            {otherFiles.length > 0 && (
+              <div style={{ marginTop: '16px' }}>
+                <button
+                  type="button"
+                  style={styles.expanderButton}
+                  onClick={() => setShowOtherFiles((v) => !v)}
+                >
+                  {showOtherFiles ? 'Hide' : 'Show'} unclassified files ({otherFiles.length})
+                </button>
+                {showOtherFiles && (
+                  <div style={{ ...styles.section, marginTop: '10px' }}>
+                    <h3 style={styles.sectionTitle}>
+                      <span style={styles.sectionIcon}>&#128196;</span>
+                      Unclassified Files &mdash; use the dropdown to reclassify
+                    </h3>
+                    <FileList
+                      files={otherFiles}
+                      selectionField="is_selected_erd"
+                      onToggle={handleFileToggle}
+                      onSelectAll={(selected) => handleSelectAll('erd', 'is_selected_erd', selected)}
+                      scoreField="confidence_score"
+                      scoreLabel="Confidence"
+                      onReclassify={handleReclassify}
                     />
                   </div>
                 )}
