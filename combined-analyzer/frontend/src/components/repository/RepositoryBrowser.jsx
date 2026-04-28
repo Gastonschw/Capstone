@@ -780,8 +780,7 @@ export default function RepositoryBrowser({ repositoryId, onBack, onAnalysisComp
   const selectedErdCount = erdFiles.filter((f) => f.is_selected_erd).length;
   const selectedIntegrityCount = integrityFiles.filter((f) => f.is_selected_integrity).length;
 
-  const canAnalyzeErd = erdFiles.filter((f) => f.file_type === 'erd_image' && f.is_selected_erd).length > 0 &&
-                        erdFiles.filter((f) => f.file_type === 'user_story' && f.is_selected_erd).length > 0;
+  const canAnalyzeErd = erdFiles.filter((f) => f.is_selected_erd).length > 0;
   const canAnalyzeIntegrity = selectedIntegrityCount > 0;
   // New analysis types reuse the same code/config files as integrity
   const canAnalyzeCompliance = integrityFiles.filter((f) => f.is_selected_compliance).length > 0;
@@ -1029,7 +1028,7 @@ export default function RepositoryBrowser({ repositoryId, onBack, onAnalysisComp
               {!canAnalyze && (
                 <p style={styles.hint}>
                   {analysisTypes.erd && !canAnalyzeErd && (
-                    <>For ERD analysis, select at least one ERD image and one user story file. </>
+                    <>For ERD analysis, select at least one file above. </>
                   )}
                   {analysisTypes.integrity && !canAnalyzeIntegrity && (
                     <>For Integrity analysis, select at least one code or config file. </>
