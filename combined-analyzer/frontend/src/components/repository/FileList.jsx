@@ -157,9 +157,8 @@ export default function FileList({ files, selectionField, onToggle, onSelectAll,
     if (query) {
       result = result.filter((f) => {
         const path = (f.file_path || '').toLowerCase();
-        const type = (f.file_type || '').toLowerCase();
         const language = (f.language || '').toLowerCase();
-        return path.includes(query) || type.includes(query) || language.includes(query);
+        return path.includes(query) || language.includes(query);
       });
     }
     // Sort: selected first, then by score descending
