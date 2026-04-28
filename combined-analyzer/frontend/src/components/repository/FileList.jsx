@@ -152,15 +152,27 @@ export default function FileList({ files, selectionField, onToggle, onSelectAll,
   }
 
   const filteredFiles = useMemo(() => {
+    let result = [...files];
     const query = searchValue.trim().toLowerCase();
-    if (!query) return files;
-    return files.filter((f) => {
-      const path = (f.file_path || '').toLowerCase();
-      const type = (f.file_type || '').toLowerCase();
-      const language = (f.language || '').toLowerCase();
-      return path.includes(query) || type.includes(query) || language.includes(query);
+    if (query) {
+      result = result.filter((f) => {
+        const path = (f.file_path || '').toLowerCase();
+        const type = (f.file_type || '').toLowerCase();
+        const language = (f.language || '').toLowerCase();
+        return path.includes(query) || type.includes(query) || language.includes(query);
+      });
+    }
+    // Sort: selected first, then by score descending
+    const sf = selectionField;
+    const scf = scoreField;
+    result.sort((a, b) => {
+      const aSelected = a[sf] ? 1 : 0;
+      const bSelected = b[sf] ? 1 : 0;
+      if (aSelected !== bSelected) return bSelected - aSelected;
+      return (b[scf] || 0) - (a[scf] || 0);
     });
-  }, [files, searchValue]);
+    return result;
+  }, [files, searchValue, selectionField, scoreField]);
 
   const allSelected = filteredFiles.length > 0 && filteredFiles.every((f) => f[selectionField]);
   const someSelected = filteredFiles.some((f) => f[selectionField]);
