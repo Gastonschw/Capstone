@@ -252,6 +252,9 @@ Guidelines:
 - Note any inheritance/generalization relationships
 
 Be thorough and extract ALL elements visible in the diagram.
+
+IMPORTANT: If this image does not appear to be an ERD or database diagram (e.g. it is a screenshot, UI mockup, or unrelated image), return the JSON with an empty "classes" array and add a note explaining that the image does not appear to contain an ERD.
+
 Only return the JSON object, no additional text."""
 
     def _call_completion():
@@ -315,6 +318,102 @@ Only return the JSON object, no additional text."""
             "associations": [],
             "generalizations": [],
             "notes": ["Failed to parse structured output"]
+        }
+
+
+async def extract_uml_from_text(text_content: str, file_path: str, api_key: Optional[str] = None, model: Optional[str] = None) -> Dict[str, Any]:
+    """
+    Extract UML structure from a text file that may describe an ERD
+    (e.g. markdown tables, SQL DDL, textual entity descriptions).
+    """
+    client = get_client(api_key=api_key)
+    resolved_model = model or TAMU_DEFAULT_MODEL
+
+    extraction_prompt = f"""Analyze the following text file and extract any Entity-Relationship Diagram (ERD) or database schema information from it.
+
+The file may contain ERD descriptions in any format: markdown tables, SQL CREATE statements, plain-text entity lists, structured schema descriptions, etc.
+
+## File: {file_path}
+```
+{text_content[:8000]}
+```
+
+Return a JSON object with the same UML format:
+
+{{
+    "classes": [
+        {{
+            "name": "ClassName",
+            "attributes": [
+                {{
+                    "name": "attribute_name",
+                    "type": "data_type",
+                    "visibility": "public",
+                    "is_primary_key": true/false,
+                    "is_foreign_key": true/false,
+                    "is_nullable": true/false,
+                    "default_value": "optional default"
+                }}
+            ],
+            "methods": []
+        }}
+    ],
+    "associations": [
+        {{
+            "source": "SourceClass",
+            "target": "TargetClass",
+            "association_type": "association|aggregation|composition",
+            "source_multiplicity": "1|0..1|*|1..*|0..*",
+            "target_multiplicity": "1|0..1|*|1..*|0..*",
+            "label": "optional relationship name",
+            "source_role": "",
+            "target_role": ""
+        }}
+    ],
+    "generalizations": [],
+    "notes": []
+}}
+
+IMPORTANT: If this file does not contain any ERD, database schema, or entity/relationship information, return the JSON with an empty "classes" array and add a note explaining that the file does not appear to describe a data model.
+
+Only return the JSON object, no additional text."""
+
+    def _call_completion():
+        resp = client.chat.completions.create(
+            model=resolved_model,
+            max_tokens=4096,
+            messages=[{"role": "user", "content": extraction_prompt}],
+            stream=True,
+        )
+        return _collect_stream(resp)
+
+    try:
+        response_text = await asyncio.to_thread(_call_completion)
+    except Exception as e:
+        logger.error("Text-based ERD extraction failed for %s: %s", file_path, e)
+        response_text = ""
+
+    if not isinstance(response_text, str):
+        response_text = ""
+
+    try:
+        if "```json" in response_text:
+            response_text = response_text.split("```json")[1].split("```")[0]
+        elif "```" in response_text:
+            response_text = response_text.split("```")[1].split("```")[0]
+        return json.loads(response_text.strip())
+    except json.JSONDecodeError:
+        repaired = _repair_truncated_json(response_text.strip())
+        if repaired:
+            try:
+                return json.loads(repaired)
+            except json.JSONDecodeError:
+                pass
+        return {
+            "classes": [],
+            "associations": [],
+            "generalizations": [],
+            "notes": [f"Failed to parse ERD from text file: {file_path}"]
         }
 
 
@@ -475,6 +574,9 @@ Analyze whether the data model properly supports all the user stories. Return a 
 }}
 
 Be thorough but fair. Only flag genuine issues that would prevent the user stories from being properly implemented.
+
+IMPORTANT: If after thorough examination the provided files do not appear to contain valid ERD diagrams or user stories (e.g. they are unrelated screenshots, code files, or generic documentation), note this clearly in the summary. Explain what you expected to find vs. what was actually provided, and suggest the user verify they selected the correct files. Still produce the best analysis you can with whatever content is available.
+
 Only return the JSON object, no additional text."""
 
     def _call_completion():
@@ -550,49 +652,72 @@ async def run_erd_analysis(
         )
         files = result.scalars().all()
 
-        erd_files = [f for f in files if f.file_type == FileType.erd_image.value and f.is_selected_erd]
-        story_files = [f for f in files if f.file_type == FileType.user_story.value and f.is_selected_erd]
+        selected = [f for f in files if f.is_selected_erd]
 
-        # Validate we have required files
-        if not erd_files:
+        if not selected:
             return WorkflowResult(
                 success=False,
-                error="No ERD images selected. Please select at least one ERD diagram image."
+                error="No files selected. Please select at least one file for ERD analysis."
             )
 
-        if not story_files:
-            return WorkflowResult(
-                success=False,
-                error="No user story files selected. Please select at least one user story file."
+        # Split selected files by actual extension — let users select anything
+        image_exts = {'.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.bmp'}
+        image_files = [f for f in selected if Path(f.file_path).suffix.lower() in image_exts]
+        text_files = [f for f in selected if Path(f.file_path).suffix.lower() not in image_exts]
+
+        # Extract UML from images (if any)
+        uml_structure = {"classes": [], "associations": [], "generalizations": [], "notes": []}
+        if image_files:
+            erd_image_paths = [str(Path(repo_path) / f.file_path) for f in image_files]
+            uml_structure = await extract_uml_from_multiple_images(
+                erd_image_paths, api_key=api_key, model=model
             )
 
-        # Extract UML from ERD images
-        erd_image_paths = [
-            str(Path(repo_path) / f.file_path)
-            for f in erd_files
-        ]
+        # For text files: try to extract ERD structure first, then treat
+        # the rest as user stories.  This lets markdown/text ERDs work.
+        story_paths = []
+        if text_files:
+            for tf in text_files:
+                full_path = Path(repo_path) / tf.file_path
+                try:
+                    content = full_path.read_text(encoding='utf-8', errors='ignore')
+                except Exception:
+                    content = ""
 
-        uml_structure = await extract_uml_from_multiple_images(
-            erd_image_paths, api_key=api_key, model=model
-        )
+                if not content.strip():
+                    continue
 
-        # Validate UML extraction
-        if not uml_structure.get("classes"):
+                # Only attempt text-based ERD extraction when we still have
+                # no classes (from images or a prior text file).
+                if not uml_structure.get("classes"):
+                    text_uml = await extract_uml_from_text(
+                        content, tf.file_path, api_key=api_key, model=model
+                    )
+                    if text_uml.get("classes"):
+                        # Merge into uml_structure
+                        existing = {c["name"] for c in uml_structure["classes"]}
+                        for cls in text_uml.get("classes", []):
+                            if cls["name"] not in existing:
+                                uml_structure["classes"].append(cls)
+                                existing.add(cls["name"])
+                        uml_structure["associations"].extend(text_uml.get("associations", []))
+                        uml_structure["generalizations"].extend(text_uml.get("generalizations", []))
+                        uml_structure["notes"].extend(text_uml.get("notes", []))
+                        continue  # used as ERD, skip user-story path
+
+                # Otherwise treat as user story content
+                story_paths.append(tf.file_path)
+
+        user_stories = ""
+        if story_paths:
+            user_stories = read_user_stories_from_files(repo_path, story_paths)
+
+        # If we got nothing useful from either path, let the user know
+        if not uml_structure.get("classes") and not user_stories.strip():
             return WorkflowResult(
                 success=False,
-                error="Failed to extract any entities from the ERD images. Please ensure the images contain valid ERD diagrams.",
-                uml_structure=uml_structure
-            )
-
-        # Read user stories
-        story_file_paths = [f.file_path for f in story_files]
-        user_stories = read_user_stories_from_files(repo_path, story_file_paths)
-
-        if not user_stories.strip():
-            return WorkflowResult(
-                success=False,
-                error="User story files were found but appear to be empty.",
-                uml_structure=uml_structure
+                error="Could not extract any ERD structure or user stories from the selected files. "
+                      "Please verify that the selected files contain ERD diagrams or user story content."
             )
 
         # Run analysis
