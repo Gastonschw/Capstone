@@ -510,7 +510,11 @@ async def analyze_uml_against_stories(
 {user_stories}
 
 ## Your Task:
-Analyze whether the data model properly supports all the user stories. Return a JSON report:
+Analyze whether the data model properly supports all the user stories. Return a JSON report.
+
+CRITICAL RULE: Every finding MUST reference the specific user stories that justify it. Use user story IDs (e.g. "US-1", "US-2.1") when the stories have explicit IDs. If the stories do not have IDs, use a short summary of the story instead (e.g. "User login story", "Shopping cart checkout"). If a finding cannot be traced back to at least one user story, do NOT include it. This applies to ALL sections below.
+
+JSON format:
 
 {{
     "summary": "Brief overall assessment of how well the ERD supports the user stories",
@@ -518,6 +522,7 @@ Analyze whether the data model properly supports all the user stories. Return a 
     "missing_entities": [
         {{
             "entity_name": "suggested entity/class name",
+            "user_story_ids": ["US-1", "US-2"],
             "reason": "which user story requires this and why",
             "suggested_attributes": ["attr1: type", "attr2: type"]
         }}
@@ -526,6 +531,7 @@ Analyze whether the data model properly supports all the user stories. Return a 
         {{
             "from_entity": "Entity1",
             "to_entity": "Entity2",
+            "user_story_ids": ["US-1"],
             "reason": "why this relationship is needed based on user stories",
             "suggested_type": "association|aggregation|composition",
             "suggested_multiplicity": "e.g., 1 to *"
@@ -536,12 +542,14 @@ Analyze whether the data model properly supports all the user stories. Return a 
             "relationship": "Entity1 -> Entity2",
             "current": "current multiplicity",
             "suggested": "correct multiplicity",
+            "user_story_ids": ["US-3"],
             "reason": "explanation based on user story"
         }}
     ],
     "orphaned_entities": [
         {{
             "entity_name": "name",
+            "user_story_ids": ["US-4"],
             "reason": "why this entity appears unnecessary for the given user stories"
         }}
     ],
@@ -550,6 +558,7 @@ Analyze whether the data model properly supports all the user stories. Return a 
             "entity_name": "Entity",
             "attribute_name": "missing_attribute",
             "attribute_type": "suggested type",
+            "user_story_ids": ["US-2"],
             "reason": "which user story requires this"
         }}
     ],
@@ -557,6 +566,7 @@ Analyze whether the data model properly supports all the user stories. Return a 
         {{
             "concern": "description of the concern",
             "affected_entities": ["Entity1", "Entity2"],
+            "user_story_ids": ["US-1", "US-5"],
             "recommendation": "how to address it"
         }}
     ],
@@ -566,6 +576,7 @@ Analyze whether the data model properly supports all the user stories. Return a 
     ],
     "user_story_coverage": [
         {{
+            "story_id": "US-1",
             "story_summary": "brief summary of user story",
             "coverage_status": "fully_covered|partially_covered|not_covered",
             "notes": "explanation"
@@ -573,7 +584,7 @@ Analyze whether the data model properly supports all the user stories. Return a 
     ]
 }}
 
-Be thorough but fair. Only flag genuine issues that would prevent the user stories from being properly implemented.
+Be thorough but fair. Only flag genuine issues that would prevent the user stories from being properly implemented. Remember: every finding must reference the user stories that justify it — by ID when available, by summary otherwise.
 
 IMPORTANT: If after thorough examination the provided files do not appear to contain valid ERD diagrams or user stories (e.g. they are unrelated screenshots, code files, or generic documentation), note this clearly in the summary. Explain what you expected to find vs. what was actually provided, and suggest the user verify they selected the correct files. Still produce the best analysis you can with whatever content is available.
 
