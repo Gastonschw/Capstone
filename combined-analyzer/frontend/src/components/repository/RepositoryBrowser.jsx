@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   getRepository,
   updateFileSelection,
@@ -390,21 +390,27 @@ export default function RepositoryBrowser({ repositoryId, onBack, onAnalysisComp
     erd: false, integrity: false, compliance: false, correctness: false,
     usability: false, maintainability: false,
   });
+  const lifecycle = useRef(0);
+  const pollers = useRef(new Map());
+  const starting = useRef(false);
 
   const loadRepository = async () => {
+    const generation = lifecycle.current;
     setLoading(true);
     setError(null);
     try {
       const repo = await getRepository(repositoryId);
+      if (generation !== lifecycle.current) return;
       setRepository(repo);
     } catch (err) {
-      setError('Failed to load repository');
+      if (generation === lifecycle.current) setError('Failed to load repository');
     } finally {
-      setLoading(false);
+      if (generation === lifecycle.current) setLoading(false);
     }
   };
 
   const loadLatestRuns = useCallback(async () => {
+    const generation = lifecycle.current;
     setLatestLoading(true);
     setLatestError('');
     try {
@@ -416,13 +422,14 @@ export default function RepositoryBrowser({ repositoryId, onBack, onAnalysisComp
         usabilityList,
         maintainabilityList,
       ] = await Promise.all([
-        listERDAnalyses(repositoryId).catch(() => []),
-        listIntegrityAnalyses(repositoryId).catch(() => []),
-        listComplianceAnalyses(repositoryId).catch(() => []),
-        listCorrectnessAnalyses(repositoryId).catch(() => []),
-        listUsabilityAnalyses(repositoryId).catch(() => []),
-        listMaintainabilityAnalyses(repositoryId).catch(() => []),
+        listERDAnalyses(repositoryId),
+        listIntegrityAnalyses(repositoryId),
+        listComplianceAnalyses(repositoryId),
+        listCorrectnessAnalyses(repositoryId),
+        listUsabilityAnalyses(repositoryId),
+        listMaintainabilityAnalyses(repositoryId),
       ]);
+      if (generation !== lifecycle.current) return;
 
       // APIs return newest first; surface the latest run for any status so in-progress jobs are visible.
       const pickLatestRun = (list) => {
@@ -440,6 +447,7 @@ export default function RepositoryBrowser({ repositoryId, onBack, onAnalysisComp
       };
       setLatestRuns(next);
     } catch (e) {
+      if (generation !== lifecycle.current) return;
       setLatestError('Failed to load latest results');
       setLatestRuns({
         erd: null,
@@ -450,13 +458,24 @@ export default function RepositoryBrowser({ repositoryId, onBack, onAnalysisComp
         maintainability: null,
       });
     } finally {
-      setLatestLoading(false);
+      if (generation === lifecycle.current) setLatestLoading(false);
     }
   }, [repositoryId]);
 
   useEffect(() => {
+    lifecycle.current += 1;
+    starting.current = false;
+    setAnalyzing(false);
+    setRunningTypes({});
+    setLatestRuns({});
+    setRepository(null);
     loadRepository();
     loadLatestRuns();
+    return () => {
+      lifecycle.current += 1;
+      for (const cancel of pollers.current.values()) cancel();
+      pollers.current.clear();
+    };
   }, [repositoryId, loadLatestRuns]);
 
   useEffect(() => {
@@ -517,15 +536,17 @@ export default function RepositoryBrowser({ repositoryId, onBack, onAnalysisComp
   };
 
   const handleViewLatest = async (type) => {
+    const generation = lifecycle.current;
     const run = latestRuns[type];
     if (!run?.id) return;
     const getter = analysisGetters[type];
     if (!getter) return;
     try {
       const full = await getter(run.id);
+      if (generation !== lifecycle.current) return;
       onAnalysisComplete(full, type);
     } catch (e) {
-      setLatestError('Failed to open report');
+      if (generation === lifecycle.current) setLatestError('Failed to open report');
     }
   };
 
@@ -667,7 +688,7 @@ export default function RepositoryBrowser({ repositoryId, onBack, onAnalysisComp
     setRefreshing(true);
     setError(null);
     try {
-      await rediscoverFiles(repositoryId);
+      await rediscoverFiles(repositoryId, tamuApiKey);
       await loadRepository();
       await loadLatestRuns();
     } catch (err) {
@@ -691,6 +712,7 @@ export default function RepositoryBrowser({ repositoryId, onBack, onAnalysisComp
   };
 
   const handleAnalyze = async () => {
+    if (analyzing || starting.current || !canAnalyze) return;
     const anySelected = Object.values(analysisTypes).some(Boolean);
     if (!anySelected) {
       setError('Please select at least one analysis type');
@@ -712,40 +734,44 @@ export default function RepositoryBrowser({ repositoryId, onBack, onAnalysisComp
     const selectedTypes = Object.keys(analysisTypes).filter((t) => analysisTypes[t]);
     if (selectedTypes.length === 0) return;
 
-    const total = selectedTypes.length;
-    const terminalAnalysisIds = new Set();
-
-    try {
-      // Start each analysis sequentially to avoid race conditions
-      const startedAnalyses = [];
-      for (const type of selectedTypes) {
+    const generation = lifecycle.current;
+    starting.current = true;
+    const syncRunning = () => {
+      if (generation !== lifecycle.current) return;
+      setAnalyzing(starting.current || pollers.current.size > 0);
+    };
+    for (const type of selectedTypes) {
+      try {
         const analysis = await starters[type]();
-        console.log(`Started ${type} analysis with id=${analysis.id}`);
-        startedAnalyses.push({ type, id: analysis.id });
+        if (generation !== lifecycle.current) return;
+        const key = `${type}:${analysis.id}`;
         setRunningTypes((prev) => ({ ...prev, [type]: true }));
-      }
-
-      await loadLatestRuns();
-
-      // Poll each analysis independently (update status but do not auto-navigate)
-      for (const { type, id } of startedAnalyses) {
-        pollAnalysis(type, id, (updatedAnalysis) => {
-          if (updatedAnalysis.status === 'completed' || updatedAnalysis.status === 'failed') {
-            if (terminalAnalysisIds.has(id)) return;
-            terminalAnalysisIds.add(id);
-            setRunningTypes((prev) => ({ ...prev, [type]: false }));
-            // Refresh cards as each run finishes so users see scores without waiting for the whole batch
-            loadLatestRuns();
-            if (terminalAnalysisIds.size >= total) {
-              setAnalyzing(false);
-            }
-          }
+        setLatestRuns((prev) => ({ ...prev, [type]: analysis }));
+        const finish = () => {
+          if (generation !== lifecycle.current || !pollers.current.has(key)) return;
+          pollers.current.get(key)();
+          pollers.current.delete(key);
+          setRunningTypes((prev) => ({ ...prev, [type]: false }));
+          syncRunning();
+          loadLatestRuns();
+        };
+        const cancel = pollAnalysis(type, analysis.id, (updated) => {
+          if (generation !== lifecycle.current) return;
+          setLatestRuns((prev) => ({ ...prev, [type]: updated }));
+          if (updated.status === 'completed' || updated.status === 'failed') finish();
+        }, 5000, (err) => {
+          if (generation !== lifecycle.current) return;
+          setError((prev) => [prev, `${type}: ${err.message || 'Unable to monitor analysis; reopen its latest report to retry.'}`].filter(Boolean).join(' '));
+          finish();
         });
+        pollers.current.set(key, cancel);
+      } catch (err) {
+        if (generation !== lifecycle.current) return;
+        setError((prev) => [prev, `${type}: ${err.response?.data?.detail || 'Failed to start analysis'}`].filter(Boolean).join(' '));
       }
-    } catch (err) {
-      setError(err.response?.data?.detail || 'Failed to start analysis');
-      setAnalyzing(false);
     }
+    starting.current = false;
+    syncRunning();
   };
 
   if (loading) {
@@ -761,7 +787,8 @@ export default function RepositoryBrowser({ repositoryId, onBack, onAnalysisComp
   if (!repository) {
     return (
       <div style={styles.loading}>
-        <p>Repository not found</p>
+        <p role="alert">{error || 'Repository not found'}</p>
+        <button style={styles.button} onClick={loadRepository}>Retry</button>
         <button style={{ ...styles.button, ...styles.backButton, marginTop: '16px' }} onClick={onBack}>
           Go Back
         </button>
@@ -797,7 +824,8 @@ export default function RepositoryBrowser({ repositoryId, onBack, onAnalysisComp
     maintainability: canAnalyzeMaintainability,
   };
 
-  const canAnalyze = Object.keys(analysisTypes).some((t) => analysisTypes[t] && canAnalyzeMap[t]);
+  const selectedTypes = Object.keys(analysisTypes).filter((t) => analysisTypes[t]);
+  const canAnalyze = selectedTypes.length > 0 && selectedTypes.every((t) => canAnalyzeMap[t]);
 
   const latestCards = [
     { type: 'erd', label: 'ERD', icon: '📊', scoreLabel: 'Coverage' },

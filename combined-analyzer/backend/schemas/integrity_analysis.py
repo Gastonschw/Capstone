@@ -2,7 +2,7 @@
 Pydantic schemas for Integrity Analysis.
 """
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional, List, Dict, Any
 from datetime import datetime
 
@@ -14,6 +14,7 @@ class Finding(BaseModel):
     line_number: Optional[int] = None
     code_snippet: Optional[str] = None
     explanation: str
+    user_story_ids: List[str] = Field(default_factory=list)
 
 
 class CharacteristicReport(BaseModel):
@@ -41,6 +42,7 @@ class IntegrityAnalysisResponse(BaseModel):
     id: int
     repository_id: int
     status: str
+    selected_files: Optional[list[dict[str, str]]] = None
     error_message: Optional[str] = None
 
     # 6 Characteristic reports
@@ -67,6 +69,7 @@ class IntegrityAnalysisListItem(BaseModel):
     id: int
     repository_id: int
     status: str
+    selected_files: Optional[list[dict[str, str]]] = None
     overall_score: Optional[float] = None
     created_at: datetime
     completed_at: Optional[datetime] = None

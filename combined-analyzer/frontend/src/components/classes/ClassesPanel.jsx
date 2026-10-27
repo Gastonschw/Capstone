@@ -758,7 +758,7 @@ export default function ClassesPanel() {
     setRevokePending({ classId, className, admin });
   };
 
-  const roleLabel = role === 'admin' ? 'Admin (Teacher)' : 'General User (Student)';
+  const roleLabel = role === 'admin' ? 'Admin (Teacher)' : teaching.length > 0 ? 'Class Administrator' : 'General User (Student)';
 
   return (
     <section style={styles.container}>

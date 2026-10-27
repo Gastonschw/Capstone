@@ -12,6 +12,7 @@ class UsabilityAnalysisResponse(BaseModel):
     id: int
     repository_id: int
     status: str
+    selected_files: Optional[list[dict[str, str]]] = None
     error_message: Optional[str] = None
 
     # 8 Characteristic reports
@@ -40,6 +41,7 @@ class UsabilityAnalysisListItem(BaseModel):
     id: int
     repository_id: int
     status: str
+    selected_files: Optional[list[dict[str, str]]] = None
     overall_score: Optional[float] = None
     created_at: datetime
     completed_at: Optional[datetime] = None

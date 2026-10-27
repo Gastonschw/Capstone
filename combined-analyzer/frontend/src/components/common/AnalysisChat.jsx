@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { sendChatMessage } from '../../api';
+import { getCurrentUserId, sendChatMessage } from '../../api';
 
 const styles = {
   container: {
@@ -146,7 +146,12 @@ function stripThinkTags(content) {
   return content.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
 }
 
-export default function AnalysisChat({ analysisId, analysisType, chatModel, chatApiKey }) {
+export default function AnalysisChat(props) {
+  const userId = getCurrentUserId();
+  return <AnalysisChatSession key={JSON.stringify([userId, props.analysisType, props.analysisId])} {...props} userId={userId} />;
+}
+
+function AnalysisChatSession({ analysisId, analysisType, chatModel, chatApiKey, userId }) {
   const [messages, setMessages] = useState([]);
   const [inputValue, setInputValue] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -154,6 +159,12 @@ export default function AnalysisChat({ analysisId, analysisType, chatModel, chat
   const [isNearBottom, setIsNearBottom] = useState(true);
   const messagesContainerRef = useRef(null);
   const forceScrollOnNextUpdateRef = useRef(false);
+  const requestRef = useRef(null);
+
+  useEffect(() => () => {
+    requestRef.current?.abort();
+    requestRef.current = null;
+  }, []);
 
   const scrollToBottom = (smooth = true) => {
     const container = messagesContainerRef.current;
@@ -180,7 +191,32 @@ export default function AnalysisChat({ analysisId, analysisType, chatModel, chat
 
   const handleSend = async () => {
     const trimmedMessage = inputValue.trim();
-    if (!trimmedMessage || isLoading) return;
+    if (!trimmedMessage || isLoading || requestRef.current || !analysisId || getCurrentUserId() !== userId) return;
+    const controller = new AbortController();
+    requestRef.current = controller;
+    const isCurrent = () => requestRef.current === controller
+      && !controller.signal.aborted && getCurrentUserId() === userId;
+    const finish = () => {
+      if (!isCurrent()) return;
+      requestRef.current = null;
+      setIsLoading(false);
+    };
+    const handleError = (error) => {
+      if (!isCurrent()) return;
+      const message = error?.message || 'Sorry, an error occurred. Please try again.';
+      setMessages(prev => {
+        const updated = [...prev];
+        const lastIdx = updated.length - 1;
+        updated[lastIdx] = {
+          ...updated[lastIdx],
+          content: updated[lastIdx].content
+            ? `${updated[lastIdx].content}\n\n${message}`
+            : message,
+        };
+        return updated;
+      });
+      finish();
+    };
 
     // Add user message
     const userMessage = { role: 'user', content: trimmedMessage };
@@ -196,8 +232,8 @@ export default function AnalysisChat({ analysisId, analysisType, chatModel, chat
     // Create placeholder for assistant message
     setMessages(prev => [...prev, { role: 'assistant', content: '' }]);
 
-    // Stream the response
-    await sendChatMessage(
+    try {
+      await sendChatMessage(
       analysisType,
       analysisId,
       trimmedMessage,
@@ -205,6 +241,7 @@ export default function AnalysisChat({ analysisId, analysisType, chatModel, chat
       chatModel,
       chatApiKey,
       (chunk) => {
+        if (!isCurrent()) return;
         // Update the last message with new chunk
         setMessages(prev => {
           const updated = [...prev];
@@ -216,25 +253,14 @@ export default function AnalysisChat({ analysisId, analysisType, chatModel, chat
           return updated;
         });
       },
-      () => {
-        // Done
-        setIsLoading(false);
-      },
-      (error) => {
-        // Error: show backend message (e.g. "TAMU API key is not configured") when available
-        const message = error?.message || 'Sorry, an error occurred. Please try again.';
-        setMessages(prev => {
-          const updated = [...prev];
-          const lastIdx = updated.length - 1;
-          updated[lastIdx] = {
-            ...updated[lastIdx],
-            content: updated[lastIdx].content || message,
-          };
-          return updated;
-        });
-        setIsLoading(false);
-      }
-    );
+      finish,
+      handleError,
+      controller.signal
+      );
+      finish();
+    } catch (error) {
+      handleError(error);
+    }
   };
 
   const handleKeyDown = (e) => {

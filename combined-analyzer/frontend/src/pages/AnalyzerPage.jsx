@@ -12,7 +12,7 @@ import CorrectnessReportView from '../components/correctness/CorrectnessReportVi
 import UsabilityReportView from '../components/usability/UsabilityReportView';
 import MaintainabilityReportView from '../components/maintainability/MaintainabilityReportView';
 import ClassesPanel from '../components/classes/ClassesPanel';
-import { listRepositories, listChatModels, setCurrentUserId } from '../api';
+import { listRepositories, listChatModels } from '../api';
 import { supabase, isSupabaseConfigured } from '../lib/supabaseClient';
 
 const CHAT_API_KEY_STORAGE = 'tamu_chat_api_key';
@@ -106,7 +106,7 @@ export default function AnalyzerPage() {
       return {
         classId: c,
         studentId: s,
-        label: n ? decodeURIComponent(n) : 'Student',
+        label: n || 'Student',
       };
     }
     return null;
@@ -129,16 +129,6 @@ export default function AnalyzerPage() {
   const modelsDebounceIsFirst = useRef(true);
   const reportExportRef = useRef(null);
 
-  useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    if (params.get('github_auth')) {
-      const sid = params.get('session_id');
-      if (sid) {
-        import('../api').then(({ setSessionId }) => setSessionId(sid));
-      }
-      window.history.replaceState({}, '', window.location.pathname);
-    }
-  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -186,14 +176,18 @@ export default function AnalyzerPage() {
     }
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       setAuthUser(session?.user ?? null);
-      setCurrentUserId(session?.user?.id ?? null);
     });
     supabase.auth.getSession().then(({ data: { session } }) => {
       setAuthUser(session?.user ?? null);
-      setCurrentUserId(session?.user?.id ?? null);
       setAuthLoading(false);
     });
     return () => subscription.unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    const clearCredentials = () => setChatApiKey('');
+    window.addEventListener('combined-analyzer-credentials-cleared', clearCredentials);
+    return () => window.removeEventListener('combined-analyzer-credentials-cleared', clearCredentials);
   }, []);
 
   useEffect(() => {

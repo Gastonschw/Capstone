@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { joinClassByCode } from '../api';
-import { supabase, isSupabaseConfigured } from '../lib/supabaseClient';
+import { joinClassByCode, signOut } from '../api';
+import { isSupabaseConfigured } from '../lib/supabaseClient';
 
 const styles = {
   page: {
@@ -103,10 +103,12 @@ export default function JoinClassPage() {
   };
 
   const handleSignOut = async () => {
-    if (supabase) {
-      await supabase.auth.signOut();
+    try {
+      await signOut();
+      navigate('/', { replace: true });
+    } catch (err) {
+      setError(err.message || 'Sign-out failed. Please try again.');
     }
-    navigate('/', { replace: true });
   };
 
   return (

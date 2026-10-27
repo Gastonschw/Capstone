@@ -12,6 +12,7 @@ from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import get_db
+from dependencies import get_current_user_id
 from models.compliance_analysis import ComplianceAnalysis
 from models.correctness_analysis import CorrectnessAnalysis
 from models.erd_analysis import ERDAnalysis
@@ -79,7 +80,7 @@ async def event_generator(
         # Send done event
         yield "data: [DONE]\n\n"
     except Exception as e:
-        yield f"data: {_encode_sse_chunk(f'Error: {str(e)}')}\n\n"
+        yield f"data: {json.dumps({'error': str(e)})}\n\n"
         yield "data: [DONE]\n\n"
 
 
@@ -252,6 +253,7 @@ async def chat_about_maintainability_analysis(
 @router.get("/models")
 async def list_chat_models(
     tamu_api_key: Optional[str] = Header(default=None, alias="X-TAMU-API-Key"),
+    user_id: str = Depends(get_current_user_id),
 ):
     """
     List available TAMU chat models for client-side selection.

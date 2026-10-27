@@ -212,18 +212,6 @@ export default function UploadForm({ onRepositoryCreated, tamuApiKey = '' }) {
   useEffect(() => {
     checkGitHubAuth();
 
-    const params = new URLSearchParams(window.location.search);
-    // Store session_id from OAuth callback for cross-origin cookie fallback
-    const sid = params.get('session_id');
-    if (sid) {
-      setSessionId(sid);
-    }
-    if (params.get('github_auth') === 'success') {
-      setSuccess('Successfully connected to GitHub!');
-      checkGitHubAuth();
-    } else if (params.get('github_auth') === 'error') {
-      setError(`GitHub authentication failed: ${params.get('message') || 'Unknown error'}`);
-    }
   }, []);
 
   const checkGitHubAuth = async () => {
@@ -302,13 +290,22 @@ export default function UploadForm({ onRepositoryCreated, tamuApiKey = '' }) {
     }
   };
 
-  const handleGitHubConnect = () => {
-    initiateGitHubAuth();
+  const handleGitHubConnect = async () => {
+    setError(null);
+    setLoading(true);
+    try {
+      await initiateGitHubAuth();
+    } catch (err) {
+      setError(err?.response?.data?.detail || err.message || 'Failed to connect to GitHub');
+    } finally {
+      setLoading(false);
+    }
   };
 
   const handleGitHubLogout = async () => {
     try {
       await logoutGitHub();
+      setSessionId(null);
       setGithubAuth({ authenticated: false, username: null });
       setGithubRepos([]);
       setSelectedRepo(null);

@@ -247,7 +247,7 @@ export default function Sidebar({
             </p>
           </div>
         ) : (
-          repositories.slice(0, 5).map((repo) => (
+          repositories.map((repo) => (
             <div
               key={repo.id}
               style={{

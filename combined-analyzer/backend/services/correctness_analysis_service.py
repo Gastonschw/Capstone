@@ -17,17 +17,17 @@ from dataclasses import dataclass
 logger = logging.getLogger(__name__)
 
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
 
-from models.repository import Repository, DiscoveredFile
+from models.repository import Repository
 from services.integrity_analysis_service import (
     _tamu_completion,
     parse_json_response,
     prepare_file_contents,
     CharacteristicReport,
-    _description_from_result,
-    _log_incomplete_response,
-    load_user_stories_for_repo,
+    validate_characteristic_response,
+    validate_summary_response,
+    validate_selected_files,
+    snapshot_user_stories,
     build_user_stories_prompt_section,
 )
 
@@ -81,18 +81,18 @@ Respond with a JSON object:
 }}"""
 
     response_text = await asyncio.to_thread(_tamu_completion, api_key, prompt, 4096, model)
-    result = parse_json_response(response_text)
-    default_desc = "No structured result from model (check API key and response format)." if not result else "Analysis incomplete"
-    description = _description_from_result(result, default_desc)
-    _log_incomplete_response("Functional Completeness (Correctness)", result, response_text or "")
+    result = validate_characteristic_response(parse_json_response(response_text))
+    
+    description = result['description']
+    
 
     return CharacteristicReport(
         characteristic="Functional Completeness (Correctness)",
-        score=result.get("score", 50),
-        status=result.get("status", "partially_fulfilled"),
+        score=result["score"],
+        status=result["status"],
         description=description,
-        findings=result.get("findings", []),
-        recommendations=result.get("recommendations", [])
+        findings=result["findings"],
+        recommendations=result["recommendations"]
     )
 
 
@@ -134,18 +134,18 @@ Respond with a JSON object:
 }}"""
 
     response_text = await asyncio.to_thread(_tamu_completion, api_key, prompt, 4096, model)
-    result = parse_json_response(response_text)
-    default_desc = "No structured result from model (check API key and response format)." if not result else "Analysis incomplete"
-    description = _description_from_result(result, default_desc)
-    _log_incomplete_response("Functional Correctness (Accuracy)", result, response_text or "")
+    result = validate_characteristic_response(parse_json_response(response_text))
+    
+    description = result['description']
+    
 
     return CharacteristicReport(
         characteristic="Functional Correctness (Accuracy)",
-        score=result.get("score", 50),
-        status=result.get("status", "partially_fulfilled"),
+        score=result["score"],
+        status=result["status"],
         description=description,
-        findings=result.get("findings", []),
-        recommendations=result.get("recommendations", [])
+        findings=result["findings"],
+        recommendations=result["recommendations"]
     )
 
 
@@ -186,18 +186,18 @@ Respond with a JSON object:
 }}"""
 
     response_text = await asyncio.to_thread(_tamu_completion, api_key, prompt, 4096, model)
-    result = parse_json_response(response_text)
-    default_desc = "No structured result from model (check API key and response format)." if not result else "Analysis incomplete"
-    description = _description_from_result(result, default_desc)
-    _log_incomplete_response("Functional Appropriateness (Correctness)", result, response_text or "")
+    result = validate_characteristic_response(parse_json_response(response_text))
+    
+    description = result['description']
+    
 
     return CharacteristicReport(
         characteristic="Functional Appropriateness (Correctness)",
-        score=result.get("score", 50),
-        status=result.get("status", "partially_fulfilled"),
+        score=result["score"],
+        status=result["status"],
         description=description,
-        findings=result.get("findings", []),
-        recommendations=result.get("recommendations", [])
+        findings=result["findings"],
+        recommendations=result["recommendations"]
     )
 
 
@@ -241,7 +241,7 @@ Respond with a JSON object:
 }}"""
 
     response_text = await asyncio.to_thread(_tamu_completion, api_key, prompt, 2048, model)
-    return parse_json_response(response_text)
+    return validate_summary_response(parse_json_response(response_text))
 
 
 async def run_correctness_analysis(
@@ -249,25 +249,15 @@ async def run_correctness_analysis(
     db: AsyncSession,
     api_key: Optional[str] = None,
     model: Optional[str] = None,
+    selected_files: Optional[List[Dict]] = None,
 ) -> CorrectnessAnalysisResult:
     """Main orchestrator: Runs the complete correctness analysis workflow."""
     repo_path = repository.local_path
 
-    result = await db.execute(
-        select(DiscoveredFile).where(
-            DiscoveredFile.repository_id == repository.id,
-            DiscoveredFile.is_selected_correctness == True
-        )
-    )
-    files = result.scalars().all()
-
-    if not files:
-        raise ValueError("No files selected for correctness analysis")
-
-    file_list = [{'file_path': f.file_path, 'file_type': f.file_type} for f in files]
+    file_list = validate_selected_files(repo_path, selected_files)
 
     # Load user stories for requirements-aware analysis
-    user_stories = await load_user_stories_for_repo(repo_path, repository.id, db)
+    user_stories = snapshot_user_stories(file_list)
 
     completeness = await analyze_functional_completeness_correctness(repo_path, file_list, api_key, model, user_stories=user_stories)
     accuracy = await analyze_functional_correctness_accuracy(repo_path, file_list, api_key, model)
@@ -280,6 +270,6 @@ async def run_correctness_analysis(
         functional_completeness_correctness=completeness,
         functional_correctness_accuracy=accuracy,
         functional_appropriateness_correctness=appropriateness,
-        overall_score=summary.get('overall_score', 50),
+        overall_score=summary['overall_score'],
         summary=summary
     )

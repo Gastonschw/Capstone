@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   ISO_ANALYSIS_LABELS,
@@ -18,7 +18,7 @@ const CHAT_API_KEY_STORAGE = 'tamu_chat_api_key';
 const CHAT_MODEL_STORAGE = 'tamu_chat_model';
 const DEFAULT_CHAT_MODEL = 'protected.Claude Opus 4.5';
 const AI_CONFIDENCE_THRESHOLD = 0.75;
-const AI_MAX_UNMATCHED = Number.POSITIVE_INFINITY;
+const AI_MAX_UNMATCHED = 200;
 
 const styles = {
   page: {
@@ -211,22 +211,17 @@ function formatRunLabel(item) {
   return `#${item.id} • ${completed}${score}`;
 }
 
-function tryParseJsonObject(text) {
-  if (!text) return null;
-  const fencedMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
-  const candidate = fencedMatch ? fencedMatch[1] : text;
+function parseAiResponse(text) {
+  let parsed;
   try {
-    return JSON.parse(candidate.trim());
+    parsed = JSON.parse(text);
   } catch {
-    const firstBrace = candidate.indexOf('{');
-    const lastBrace = candidate.lastIndexOf('}');
-    if (firstBrace === -1 || lastBrace === -1 || lastBrace <= firstBrace) return null;
-    try {
-      return JSON.parse(candidate.slice(firstBrace, lastBrace + 1));
-    } catch {
-      return null;
-    }
+    throw new Error('AI comparison returned invalid JSON. Please retry.');
   }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed) || !Array.isArray(parsed.matches)) {
+    throw new Error('AI comparison must return an object with a matches array.');
+  }
+  return parsed.matches;
 }
 
 function buildAiPrompt(analysisType, baselineUnmatched, currentUnmatched) {
@@ -280,7 +275,7 @@ export default function ComparisonPage() {
       return {
         classId: c,
         studentId: s,
-        label: n ? decodeURIComponent(n) : 'Student',
+        label: n || 'Student',
       };
     }
     return null;
@@ -302,6 +297,16 @@ export default function ComparisonPage() {
   const [comparing, setComparing] = useState(false);
   const [result, setResult] = useState(null);
   const [lastInfo, setLastInfo] = useState('');
+  const comparisonRequest = useRef(0);
+
+  useEffect(() => {
+    comparisonRequest.current += 1;
+    setComparing(false);
+    setResult(null);
+    setLastInfo('');
+    setError('');
+    return () => { comparisonRequest.current += 1; };
+  }, [baselineRepoId, currentRepoId, analysisType, baselineId, currentId, inspectCtx]);
 
   const chatApiKey = readFromStorage(CHAT_API_KEY_STORAGE, '');
   const chatModel = readFromStorage(CHAT_MODEL_STORAGE, DEFAULT_CHAT_MODEL);
@@ -318,6 +323,10 @@ export default function ComparisonPage() {
   }, [inspectCtx]);
 
   useEffect(() => {
+    let active = true;
+    setRepositories([]);
+    setBaselineRepoId('');
+    setCurrentRepoId('');
     const load = async () => {
       setRepoLoading(true);
       setError('');
@@ -325,17 +334,24 @@ export default function ComparisonPage() {
         const repos = inspectCtx
           ? await listRepositories({ classId: inspectCtx.classId, studentUserId: inspectCtx.studentId })
           : await listRepositories();
+        if (!active) return;
         setRepositories(Array.isArray(repos) ? repos : []);
       } catch (err) {
+        if (!active) return;
         setError('Failed to load repositories.');
       } finally {
-        setRepoLoading(false);
+        if (active) setRepoLoading(false);
       }
     };
     load();
+    return () => { active = false; };
   }, [inspectCtx]);
 
   useEffect(() => {
+    let active = true;
+    setBaselineRuns([]);
+    setBaselineId('');
+    setBaselineRunsLoading(Boolean(baselineRepoId));
     const loadBaselineRuns = async () => {
       if (!baselineRepoId) {
         setBaselineRuns([]);
@@ -347,21 +363,28 @@ export default function ComparisonPage() {
       setResult(null);
       try {
         const raw = await listIsoAnalysesByType(analysisType, baselineRepoId);
+        if (!active) return;
         const completed = (Array.isArray(raw) ? raw : []).filter((item) => item?.status === 'completed');
         setBaselineRuns(completed);
         setBaselineId(completed[0] ? String(completed[0].id) : '');
       } catch (err) {
+        if (!active) return;
         setError('Failed to load baseline reports for this type.');
         setBaselineRuns([]);
         setBaselineId('');
       } finally {
-        setBaselineRunsLoading(false);
+        if (active) setBaselineRunsLoading(false);
       }
     };
     loadBaselineRuns();
-  }, [baselineRepoId, analysisType]);
+    return () => { active = false; };
+  }, [baselineRepoId, analysisType, inspectCtx]);
 
   useEffect(() => {
+    let active = true;
+    setCurrentRuns([]);
+    setCurrentId('');
+    setCurrentRunsLoading(Boolean(currentRepoId));
     const loadCurrentRuns = async () => {
       if (!currentRepoId) {
         setCurrentRuns([]);
@@ -373,19 +396,22 @@ export default function ComparisonPage() {
       setResult(null);
       try {
         const raw = await listIsoAnalysesByType(analysisType, currentRepoId);
+        if (!active) return;
         const completed = (Array.isArray(raw) ? raw : []).filter((item) => item?.status === 'completed');
         setCurrentRuns(completed);
         setCurrentId(completed[0] ? String(completed[0].id) : '');
       } catch (err) {
+        if (!active) return;
         setError('Failed to load current reports for this type.');
         setCurrentRuns([]);
         setCurrentId('');
       } finally {
-        setCurrentRunsLoading(false);
+        if (active) setCurrentRunsLoading(false);
       }
     };
     loadCurrentRuns();
-  }, [currentRepoId, analysisType]);
+    return () => { active = false; };
+  }, [currentRepoId, analysisType, inspectCtx]);
 
   useEffect(() => {
     if (!baselineRepoId || !currentRepoId) return;
@@ -402,11 +428,14 @@ export default function ComparisonPage() {
     const sameRepo = baselineRepoId && currentRepoId && baselineRepoId === currentRepoId;
     const sameRunSelection = baselineId && currentId && baselineId === currentId;
     if (sameRepo && sameRunSelection) return false;
-    return Boolean(baselineRepoId && currentRepoId && baselineId && currentId && !comparing);
-  }, [baselineRepoId, currentRepoId, baselineId, currentId, comparing]);
+    return Boolean(baselineRepoId && currentRepoId && baselineId && currentId &&
+      !comparing && !repoLoading && !baselineRunsLoading && !currentRunsLoading);
+  }, [baselineRepoId, currentRepoId, baselineId, currentId, comparing, repoLoading, baselineRunsLoading, currentRunsLoading]);
 
   const handleCompare = async () => {
     if (!canCompare) return;
+    const request = ++comparisonRequest.current;
+    const isCurrent = () => comparisonRequest.current === request;
     setComparing(true);
     setError('');
     setResult(null);
@@ -417,16 +446,18 @@ export default function ComparisonPage() {
         getIsoAnalysisByType(analysisType, baselineId),
         getIsoAnalysisByType(analysisType, currentId),
       ]);
+      if (!isCurrent()) return;
 
       const baselineFindings = extractIsoFindings(baselineAnalysis, analysisType);
       const currentFindings = extractIsoFindings(currentAnalysis, analysisType);
+      if (baselineFindings.length > AI_MAX_UNMATCHED || currentFindings.length > AI_MAX_UNMATCHED) {
+        throw new Error(`AI comparison supports at most ${AI_MAX_UNMATCHED} findings per report. No findings were compared or omitted.`);
+      }
       const aiInput = {
         unchanged: [],
         unmatchedBaseline: baselineFindings
-          .slice(0, AI_MAX_UNMATCHED)
           .map((finding, index) => ({ finding, index })),
         unmatchedCurrent: currentFindings
-          .slice(0, AI_MAX_UNMATCHED)
           .map((finding, index) => ({ finding, index })),
       };
       const limitedBaseline = aiInput.unmatchedBaseline.map((entry) => entry.finding);
@@ -437,29 +468,16 @@ export default function ComparisonPage() {
 
       if (limitedBaseline.length > 0 && limitedCurrent.length > 0) {
         const prompt = buildAiPrompt(analysisType, limitedBaseline, limitedCurrent);
-        try {
-          const responseText = await sendChatAndCollect(
-            analysisType,
-            currentId,
-            prompt,
-            chatModel,
-            chatApiKey
-          );
-          const parsed = tryParseJsonObject(responseText);
-          const rawMatches = Array.isArray(parsed?.matches) ? parsed.matches : [];
-          aiMatches = rawMatches.filter((match) => (
-            Number.isInteger(Number(match?.baseline_index)) &&
-            Number.isInteger(Number(match?.current_index)) &&
-            Number(match.baseline_index) >= 0 &&
-            Number(match.current_index) >= 0 &&
-            Number(match.baseline_index) < limitedBaseline.length &&
-            Number(match.current_index) < limitedCurrent.length
-          ));
-          aiInfo = `AI-only processed ${limitedBaseline.length} baseline x ${limitedCurrent.length} current findings.`;
-        } catch {
-          aiMatches = [];
-          aiInfo = 'AI-only comparison unavailable; no semantic matches were applied.';
-        }
+        const responseText = await sendChatAndCollect(
+          analysisType,
+          currentId,
+          prompt,
+          chatModel,
+          chatApiKey
+        );
+        if (!isCurrent()) return;
+        aiMatches = parseAiResponse(responseText);
+        aiInfo = `AI-only processed ${limitedBaseline.length} baseline x ${limitedCurrent.length} current findings.`;
       }
 
       const merged = mergeAiMatches(
@@ -481,9 +499,9 @@ export default function ComparisonPage() {
       });
       setLastInfo(aiInfo);
     } catch (err) {
-      setError('Failed to compare selected reports.');
+      if (isCurrent()) setError(err?.message || 'Failed to compare selected reports.');
     } finally {
-      setComparing(false);
+      if (isCurrent()) setComparing(false);
     }
   };
 

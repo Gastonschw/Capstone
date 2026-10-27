@@ -8,9 +8,9 @@ from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Request,
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from database import get_db
-from dependencies import get_optional_user_id
+from dependencies import get_current_user_id
 from models.repository import Repository, DiscoveredFile
-from models.classroom import Class, ClassMember
+from models.classroom import Class, ClassAdmin, ClassMember
 from models.erd_analysis import ERDAnalysis
 from models.integrity_analysis import IntegrityAnalysis
 from models.compliance_analysis import ComplianceAnalysis
@@ -24,7 +24,6 @@ from schemas.repository import (
 )
 from services.folder_service import delete_repository_files
 from services.discovery_service import run_discovery_only
-from services.user_service import get_user_role
 from services.repository_access import require_repository_access
 
 router = APIRouter(prefix="/api", tags=["repositories"])
@@ -68,14 +67,12 @@ async def list_repositories(
     db: AsyncSession = Depends(get_db),
     class_id: Optional[str] = Query(None),
     student_user_id: Optional[str] = Query(None),
+    limit: int = Query(50, ge=1, le=100),
+    offset: int = Query(0, ge=0),
 ):
-    """List repositories. When X-User-Id header is sent, only that user's repos are returned.
-
-    With class_id and student_user_id (together), the current user must be an admin who owns
-    that class and the student must be enrolled; returns that student's recent repos.
-    """
-    user_id_raw = get_optional_user_id(request)
-    owner_uuid: Optional[uuid.UUID] = None
+    """List owned repositories, or a student's repositories for their class teachers."""
+    current_uid = uuid.UUID(await get_current_user_id(request))
+    owner_uuid = current_uid
 
     if (class_id is None) ^ (student_user_id is None):
         raise HTTPException(
@@ -83,26 +80,26 @@ async def list_repositories(
             detail="class_id and student_user_id must be provided together",
         )
 
-    if class_id and student_user_id:
-        if not user_id_raw:
-            raise HTTPException(status_code=401, detail="Supabase user id is required (X-User-Id header)")
+    if class_id is not None and student_user_id is not None:
         try:
-            current_uid = uuid.UUID(user_id_raw)
             class_uuid = uuid.UUID(class_id)
             student_uuid = uuid.UUID(student_user_id)
         except (ValueError, TypeError):
             raise HTTPException(status_code=400, detail="Invalid UUID in class_id or student_user_id")
-
-        role = await get_user_role(db, current_uid)
-        if role != "admin":
-            raise HTTPException(status_code=403, detail="Only admins can list another user's repositories")
 
         cres = await db.execute(select(Class).where(Class.id == class_uuid))
         cobj = cres.scalar_one_or_none()
         if not cobj:
             raise HTTPException(status_code=404, detail="Class not found")
         if cobj.owner_user_id != current_uid:
-            raise HTTPException(status_code=403, detail="You do not teach this class")
+            admin_result = await db.execute(
+                select(ClassAdmin.id).where(
+                    ClassAdmin.class_id == class_uuid,
+                    ClassAdmin.user_id == current_uid,
+                )
+            )
+            if admin_result.scalar_one_or_none() is None:
+                raise HTTPException(status_code=403, detail="You do not teach this class")
 
         mres = await db.execute(
             select(ClassMember).where(
@@ -114,19 +111,14 @@ async def list_repositories(
             raise HTTPException(status_code=403, detail="That user is not a member of this class")
 
         owner_uuid = student_uuid
-    elif user_id_raw:
-        try:
-            owner_uuid = uuid.UUID(user_id_raw)
-        except (ValueError, TypeError):
-            pass
-    else:
-        # Unauthenticated listing would expose arbitrary repositories; return none.
-        return []
 
-    q = select(Repository).order_by(Repository.created_at.desc())
-    if owner_uuid is not None:
-        q = q.where(Repository.owner_user_id == owner_uuid)
-    q = q.limit(5)
+    q = (
+        select(Repository)
+        .where(Repository.owner_user_id == owner_uuid)
+        .order_by(Repository.created_at.desc(), Repository.id.desc())
+        .limit(limit)
+        .offset(offset)
+    )
     result = await db.execute(q)
     repositories = result.scalars().all()
 
@@ -242,8 +234,9 @@ async def rediscover_files(
     """Re-run file discovery for a repository."""
     repository = await require_repository_access(request, db, repository_id)
 
-    # Run discovery in background
-    discovery_result = await run_discovery_only(repository, db)
+    discovery_result = await run_discovery_only(
+        repository, db, api_key=request.headers.get("X-TAMU-API-Key")
+    )
 
     return {
         "message": "File discovery completed",

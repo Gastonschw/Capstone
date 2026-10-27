@@ -1,32 +1,38 @@
-"""
-Optional auth dependency for Supabase user linking.
+"""Verified Supabase bearer authentication shared by protected APIs."""
 
-When the frontend uses Supabase Auth (e.g. Google login), it can send
-the current user's id so the backend links GitHub tokens and repositories
-to that user. Until Supabase Auth is integrated, this is optional.
-"""
+from uuid import UUID
 
-import re
-from typing import Optional
+import httpx
+from fastapi import HTTPException, Request
 
-from fastapi import Request
-
-# UUID v4 pattern
-UUID_PATTERN = re.compile(
-    r"^[0-9a-f]{8}-[0-9a-f]{4}-[4][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
-    re.IGNORECASE,
-)
-
-HEADER_USER_ID = "X-User-Id"
+from config import SUPABASE_ANON_KEY, SUPABASE_URL
 
 
-def get_optional_user_id(request: Request) -> Optional[str]:
-    """
-    Return the current user id from the X-User-Id header when present and valid.
-    Used to link GitHub tokens and repositories to public.users (Supabase).
-    """
-    raw = request.headers.get(HEADER_USER_ID)
-    if not raw or not raw.strip():
-        return None
-    value = raw.strip()
-    return value if UUID_PATTERN.match(value) else None
+async def get_current_user_id(request: Request) -> str:
+    """Return only the identity verified by Supabase, never a caller-supplied id."""
+    cached = getattr(request.state, "verified_user_id", None)
+    if cached is not None:
+        return cached
+    authorization = request.headers.get("Authorization", "")
+    scheme, separator, token = authorization.partition(" ")
+    if scheme.lower() != "bearer" or not separator or not token.strip():
+        raise HTTPException(status_code=401, detail="Authentication required")
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.get(
+                f"{SUPABASE_URL.rstrip('/')}/auth/v1/user",
+                headers={"Authorization": f"Bearer {token.strip()}", "apikey": SUPABASE_ANON_KEY},
+            )
+    except httpx.HTTPError:
+        raise HTTPException(status_code=503, detail="Authentication service unavailable") from None
+    if response.status_code in (401, 403):
+        raise HTTPException(status_code=401, detail="Invalid or expired access token")
+    if response.status_code != 200:
+        raise HTTPException(status_code=503, detail="Authentication service unavailable")
+    try:
+        payload = response.json()
+        user_id = str(UUID(payload["id"]))
+    except (ValueError, TypeError, KeyError, AttributeError):
+        raise HTTPException(status_code=401, detail="Invalid authentication response") from None
+    request.state.verified_user_id = user_id
+    return user_id

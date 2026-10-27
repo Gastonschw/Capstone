@@ -11,146 +11,206 @@ Uses TAMU API (OpenAI-compatible) so the same API key as chat works.
 import asyncio
 import base64
 import json
-import logging
 from pathlib import Path
 from typing import List, Dict, Any, Tuple, Optional
 from dataclasses import dataclass
 
-logger = logging.getLogger(__name__)
 
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
 
-from models.repository import Repository, DiscoveredFile, FileType
-from models.erd_analysis import ERDAnalysis
+from models.repository import Repository
 from services.chat_service import get_client, TAMU_DEFAULT_MODEL
+from config import MAX_ANALYSIS_SOURCE_BYTES
+from services.integrity_analysis_service import parse_json_response as parse_json_object
+
+
+def _strings(value, field, nonempty=False):
+    if not isinstance(value, list) or (nonempty and not value):
+        raise ValueError(f"Invalid or missing {field}")
+    if any(not isinstance(item, str) or not item.strip() for item in value):
+        raise ValueError(f"Invalid strings in {field}")
+
+
+def _fields(value, fields):
+    if not isinstance(value, dict):
+        raise ValueError("Expected an object")
+    for field in fields:
+        if not isinstance(value.get(field), str) or not value[field].strip():
+            raise ValueError(f"Invalid or missing {field}")
+
+
+def _objects(value, field):
+    items = value.get(field)
+    if not isinstance(items, list) or any(not isinstance(item, dict) for item in items):
+        raise ValueError(f"Invalid or missing {field}")
+    return items
+
+
+def _validate_uml(value):
+    for cls in _objects(value, "classes"):
+        _fields(cls, ("name",))
+        _strings(cls.get("methods"), "methods")
+        for attr in _objects(cls, "attributes"):
+            _fields(attr, ("name", "type", "visibility"))
+            if attr["visibility"] not in {"public", "private", "protected"}:
+                raise ValueError("Invalid attribute visibility")
+            for field in ("is_primary_key", "is_foreign_key", "is_nullable"):
+                if type(attr.get(field)) is not bool:
+                    raise ValueError(f"Invalid or missing {field}")
+            if "default_value" in attr and attr["default_value"] is not None and not isinstance(attr["default_value"], str):
+                raise ValueError("Invalid attribute default_value")
+    for assoc in _objects(value, "associations"):
+        _fields(assoc, ("source", "target", "association_type", "source_multiplicity", "target_multiplicity"))
+        if assoc["association_type"] not in {"association", "aggregation", "composition"}:
+            raise ValueError("Invalid association type")
+        for field in ("source_multiplicity", "target_multiplicity"):
+            if assoc[field] not in {"1", "0..1", "*", "1..*", "0..*"}:
+                raise ValueError("Invalid association multiplicity")
+        for field in ("label", "source_role", "target_role"):
+            if field in assoc and not isinstance(assoc[field], str):
+                raise ValueError(f"Invalid {field}")
+    for gen in _objects(value, "generalizations"):
+        _fields(gen, ("parent", "child"))
+    _strings(value.get("notes"), "notes")
+    return value
+
+
+def _validate_report(value):
+    _fields(value, ("summary",))
+    score = value.get("coverage_score")
+    if type(score) not in (int, float) or not 0 <= score <= 100:
+        raise ValueError("Invalid coverage_score")
+    sections = {
+        "missing_entities": ("entity_name", "reason"),
+        "missing_relationships": ("from_entity", "to_entity", "reason", "suggested_type", "suggested_multiplicity"),
+        "cardinality_issues": ("relationship", "current", "suggested", "reason"),
+        "orphaned_entities": ("entity_name", "reason"),
+        "missing_attributes": ("entity_name", "attribute_name", "attribute_type", "reason"),
+        "data_integrity_concerns": ("concern", "recommendation"),
+    }
+    for section, fields in sections.items():
+        for finding in _objects(value, section):
+            _fields(finding, fields)
+            _strings(finding.get("user_story_ids"), "user_story_ids", nonempty=True)
+            if section == "missing_entities":
+                _strings(finding.get("suggested_attributes"), "suggested_attributes")
+            if section == "data_integrity_concerns":
+                _strings(finding.get("affected_entities"), "affected_entities", nonempty=True)
+            if section == "missing_relationships" and finding["suggested_type"] not in {"association", "aggregation", "composition"}:
+                raise ValueError("Invalid suggested relationship type")
+    _strings(value.get("recommendations"), "recommendations")
+    coverage = _objects(value, "user_story_coverage")
+    if not coverage:
+        raise ValueError("Report must assess at least one user story")
+    for story in coverage:
+        _fields(story, ("story_id", "story_summary", "coverage_status", "notes"))
+        if story["coverage_status"] not in {"fully_covered", "partially_covered", "not_covered"}:
+            raise ValueError("Invalid story coverage status")
+    return value
+
+
+def _merge_uml(structures):
+    merged = {"classes": [], "associations": [], "generalizations": [], "notes": []}
+    classes = {}
+    for structure in structures:
+        for cls in structure["classes"]:
+            if cls["name"] not in classes:
+                classes[cls["name"]] = cls
+                merged["classes"].append(cls)
+                continue
+            existing = classes[cls["name"]]
+            attributes = {attr["name"]: attr for attr in existing["attributes"]}
+            for attr in cls["attributes"]:
+                if attr["name"] in attributes and attributes[attr["name"]] != attr:
+                    raise ValueError(f"Conflicting schema attribute: {cls['name']}.{attr['name']}")
+                if attr["name"] not in attributes:
+                    existing["attributes"].append(attr)
+                    attributes[attr["name"]] = attr
+            existing["methods"].extend(method for method in cls["methods"] if method not in existing["methods"])
+        for section in ("associations", "generalizations", "notes"):
+            for item in structure[section]:
+                if item not in merged[section]:
+                    merged[section].append(item)
+    return merged
+
+
+def validate_selected_files(repo_path, selected_files):
+    """Preflight the full snapshot before inserting a job or calling a provider."""
+    if not selected_files:
+        raise ValueError("No files selected for ERD analysis.")
+    root = Path(repo_path).resolve()
+    prepared = []
+    total_bytes = 0
+    for selected in selected_files:
+        relative = selected["file_path"]
+        path = (root / relative).resolve()
+        if not path.is_relative_to(root) or not path.is_file():
+            raise ValueError(f"Selected file is missing or outside the repository: {relative}")
+        suffix = path.suffix.lower()
+        if suffix in {".svg", ".bmp"}:
+            raise ValueError(f"Unsupported ERD image format: {suffix}")
+        if total_bytes + path.stat().st_size > MAX_ANALYSIS_SOURCE_BYTES:
+            raise ValueError(f"Selected ERD inputs exceed the {MAX_ANALYSIS_SOURCE_BYTES}-byte capacity.")
+        with path.open("rb") as source:
+            data = source.read(MAX_ANALYSIS_SOURCE_BYTES - total_bytes + 1)
+        total_bytes += len(data)
+        if total_bytes > MAX_ANALYSIS_SOURCE_BYTES:
+            raise ValueError(f"Selected ERD inputs exceed the {MAX_ANALYSIS_SOURCE_BYTES}-byte capacity.")
+        if not data:
+            raise ValueError(f"Selected file is empty: {relative}")
+        image = suffix in {".png", ".jpg", ".jpeg", ".gif", ".webp"}
+        content = None if image else data.decode("utf-8")
+        if content is not None and not content.strip():
+            raise ValueError(f"Selected file is empty: {relative}")
+        prepared.append({"path": relative, "absolute_path": str(path), "image": image, "content": content})
+    return prepared
 
 
 def _collect_stream(stream) -> str:
-    """Collect streamed chunks into a single string, handling both SSE strings and OpenAI objects."""
+    """Reject malformed or incomplete provider streams rather than partial reports."""
+    parts = []
+    finished = False
     if isinstance(stream, str):
-        # TAMU API sometimes returns raw SSE text — parse each data: line as JSON
-        parts = []
-        for line in stream.split("\n"):
+        for line in stream.splitlines():
             line = line.strip()
-            if not line.startswith("data: "):
+            if not line.startswith("data:"):
                 continue
-            payload = line[6:]
+            payload = line[5:].strip()
             if payload == "[DONE]":
                 break
-            try:
-                chunk = json.loads(payload)
-                choices = chunk.get("choices", [])
-                if choices:
-                    content = choices[0].get("delta", {}).get("content", "")
-                    if content:
-                        parts.append(content)
-            except json.JSONDecodeError:
+            chunk = json.loads(payload)
+            if chunk.get("error"):
+                raise ValueError("ERD provider returned an error")
+            choices = chunk.get("choices", [])
+            if not choices:
                 continue
-        return "".join(parts)
-
-    # Standard OpenAI streaming response (iterable of chunks)
-    parts = []
-    for chunk in stream:
-        if hasattr(chunk, 'choices') and chunk.choices:
-            delta = chunk.choices[0].delta
-            if hasattr(delta, 'content') and delta.content:
-                parts.append(delta.content)
+            choice = choices[0]
+            reason = choice.get("finish_reason")
+            if reason is not None:
+                if reason != "stop":
+                    raise ValueError(f"ERD provider response incomplete: {reason}")
+                finished = True
+            content = choice.get("delta", {}).get("content")
+            if content:
+                parts.append(content)
+    else:
+        for chunk in stream:
+            if not getattr(chunk, "choices", None):
+                continue
+            choice = chunk.choices[0]
+            reason = getattr(choice, "finish_reason", None)
+            if reason is not None:
+                if reason != "stop":
+                    raise ValueError(f"ERD provider response incomplete: {reason}")
+                finished = True
+            content = getattr(choice.delta, "content", None)
+            if content:
+                parts.append(content)
+    if not finished or not parts:
+        raise ValueError("ERD provider returned an empty or incomplete response")
     return "".join(parts)
 
 
-def _repair_truncated_json(text: str) -> Optional[str]:
-    """Attempt to repair JSON truncated by token limits by closing open brackets."""
-    if not text:
-        return None
-    # Strip any trailing incomplete string value
-    # Find last complete key-value or array element
-    # Then close all open brackets/braces
-    stack = []
-    in_string = False
-    escape = False
-    last_valid = 0
-    for i, ch in enumerate(text):
-        if escape:
-            escape = False
-            continue
-        if ch == '\\' and in_string:
-            escape = True
-            continue
-        if ch == '"' and not escape:
-            in_string = not in_string
-            continue
-        if in_string:
-            continue
-        if ch in ('{', '['):
-            stack.append(ch)
-            last_valid = i
-        elif ch == '}':
-            if stack and stack[-1] == '{':
-                stack.pop()
-                last_valid = i
-        elif ch == ']':
-            if stack and stack[-1] == '[':
-                stack.pop()
-                last_valid = i
-
-    if not stack:
-        return None  # Already balanced or unfixable
-
-    # Truncate to last complete value boundary
-    # Find the last comma, closing bracket, or colon+value before end
-    truncated = text.rstrip()
-    # Remove any trailing incomplete string/value
-    while truncated and truncated[-1] not in ('}', ']', '"', ',', 'e', 'l', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9'):
-        truncated = truncated[:-1]
-    # Remove trailing comma
-    if truncated.endswith(','):
-        truncated = truncated[:-1]
-    # If we're in the middle of a string value, close it
-    # Count unescaped quotes
-    quote_count = 0
-    esc = False
-    for ch in truncated:
-        if esc:
-            esc = False
-            continue
-        if ch == '\\':
-            esc = True
-            continue
-        if ch == '"':
-            quote_count += 1
-    if quote_count % 2 != 0:
-        truncated += '"'
-
-    # Close remaining open brackets
-    # Re-scan to get current stack state
-    stack2 = []
-    in_string2 = False
-    escape2 = False
-    for ch in truncated:
-        if escape2:
-            escape2 = False
-            continue
-        if ch == '\\' and in_string2:
-            escape2 = True
-            continue
-        if ch == '"' and not escape2:
-            in_string2 = not in_string2
-            continue
-        if in_string2:
-            continue
-        if ch in ('{', '['):
-            stack2.append(ch)
-        elif ch == '}' and stack2 and stack2[-1] == '{':
-            stack2.pop()
-        elif ch == ']' and stack2 and stack2[-1] == '[':
-            stack2.pop()
-
-    closers = {'[': ']', '{': '}'}
-    for bracket in reversed(stack2):
-        truncated += closers.get(bracket, '')
-
-    return truncated
 
 
 @dataclass
@@ -178,7 +238,9 @@ def encode_image(image_path: str) -> Tuple[str, str]:
         ".webp": "image/webp"
     }
 
-    media_type = media_type_map.get(suffix, "image/png")
+    if suffix not in media_type_map:
+        raise ValueError(f"Unsupported ERD image format: {suffix}")
+    media_type = media_type_map[suffix]
 
     with open(image_path, "rb") as f:
         image_data = base64.standard_b64encode(f.read()).decode("utf-8")
@@ -282,43 +344,8 @@ Only return the JSON object, no additional text."""
         )
         return _collect_stream(resp)
 
-    try:
-        response_text = await asyncio.to_thread(_call_completion)
-    except Exception as e:
-        logger.error("ERD UML extraction API call failed: %s", e, exc_info=True)
-        response_text = ""
-
-
-    if not isinstance(response_text, str):
-        logger.warning("ERD UML extraction returned non-string: %s", type(response_text))
-        response_text = ""
-
-    logger.info("ERD UML extraction response length: %d", len(response_text))
-    if not response_text.strip():
-        logger.error("ERD UML extraction returned empty response - the model may not support vision/image input")
-
-    try:
-        if "```json" in response_text:
-            response_text = response_text.split("```json")[1].split("```")[0]
-        elif "```" in response_text:
-            response_text = response_text.split("```")[1].split("```")[0]
-
-        return json.loads(response_text.strip())
-    except json.JSONDecodeError:
-        repaired = _repair_truncated_json(response_text.strip())
-        if repaired:
-            try:
-                return json.loads(repaired)
-            except json.JSONDecodeError:
-                pass
-        logger.error("ERD UML extraction JSON parse failed (len=%d). End: %.300s", len(response_text), response_text[-300:])
-        return {
-            "raw_extraction": response_text,
-            "classes": [],
-            "associations": [],
-            "generalizations": [],
-            "notes": ["Failed to parse structured output"]
-        }
+    response_text = await asyncio.to_thread(_call_completion)
+    return _validate_uml(parse_json_object(response_text))
 
 
 async def extract_uml_from_text(text_content: str, file_path: str, api_key: Optional[str] = None, model: Optional[str] = None) -> Dict[str, Any]:
@@ -335,7 +362,7 @@ The file may contain ERD descriptions in any format: markdown tables, SQL CREATE
 
 ## File: {file_path}
 ```
-{text_content[:8000]}
+{text_content}
 ```
 
 Return a JSON object with the same UML format:
@@ -387,103 +414,14 @@ Only return the JSON object, no additional text."""
         )
         return _collect_stream(resp)
 
-    try:
-        response_text = await asyncio.to_thread(_call_completion)
-    except Exception as e:
-        logger.error("Text-based ERD extraction failed for %s: %s", file_path, e)
-        response_text = ""
-
-    if not isinstance(response_text, str):
-        response_text = ""
-
-    try:
-        if "```json" in response_text:
-            response_text = response_text.split("```json")[1].split("```")[0]
-        elif "```" in response_text:
-            response_text = response_text.split("```")[1].split("```")[0]
-        return json.loads(response_text.strip())
-    except json.JSONDecodeError:
-        repaired = _repair_truncated_json(response_text.strip())
-        if repaired:
-            try:
-                return json.loads(repaired)
-            except json.JSONDecodeError:
-                pass
-        return {
-            "classes": [],
-            "associations": [],
-            "generalizations": [],
-            "notes": [f"Failed to parse ERD from text file: {file_path}"]
-        }
+    response_text = await asyncio.to_thread(_call_completion)
+    return _validate_uml(parse_json_object(response_text))
 
 
-async def extract_uml_from_multiple_images(
-    image_paths: List[str],
-    api_key: Optional[str] = None,
-    model: Optional[str] = None,
-) -> Dict[str, Any]:
-    """
-    Extract and merge UML structures from multiple ERD images.
-    """
-    all_classes = []
-    all_associations = []
-    all_generalizations = []
-    all_notes = []
-
-    for image_path in image_paths:
-        try:
-            uml = await extract_uml_from_erd(image_path, api_key=api_key, model=model)
-
-            # Merge results (avoiding duplicates by class name)
-            existing_class_names = {c["name"] for c in all_classes}
-            for cls in uml.get("classes", []):
-                if cls["name"] not in existing_class_names:
-                    all_classes.append(cls)
-                    existing_class_names.add(cls["name"])
-
-            all_associations.extend(uml.get("associations", []))
-            all_generalizations.extend(uml.get("generalizations", []))
-            all_notes.extend(uml.get("notes", []))
-
-        except Exception as e:
-            all_notes.append(f"Error processing {image_path}: {str(e)}")
-
-    # Deduplicate associations
-    unique_associations = []
-    seen = set()
-    for assoc in all_associations:
-        key = (assoc["source"], assoc["target"], assoc.get("label", ""))
-        if key not in seen:
-            unique_associations.append(assoc)
-            seen.add(key)
-
-    return {
-        "classes": all_classes,
-        "associations": unique_associations,
-        "generalizations": all_generalizations,
-        "notes": list(set(all_notes))
-    }
 
 
 # ============== Analysis Agent ==============
 
-def read_user_stories_from_files(repo_path: str, story_files: List[str]) -> str:
-    """
-    Read and concatenate user stories from multiple files.
-    """
-    repo = Path(repo_path)
-    all_stories = []
-
-    for file_path in story_files:
-        full_path = repo / file_path
-        try:
-            with open(full_path, 'r', encoding='utf-8', errors='ignore') as f:
-                content = f.read()
-            all_stories.append(f"## From: {file_path}\n\n{content}")
-        except Exception as e:
-            all_stories.append(f"## From: {file_path}\n\n[Error reading file: {e}]")
-
-    return "\n\n---\n\n".join(all_stories)
 
 
 async def analyze_uml_against_stories(
@@ -586,7 +524,7 @@ JSON format:
 
 Be thorough but fair. Only flag genuine issues that would prevent the user stories from being properly implemented. Remember: every finding must reference the user stories that justify it — by ID when available, by summary otherwise.
 
-IMPORTANT: If after thorough examination the provided files do not appear to contain valid ERD diagrams or user stories (e.g. they are unrelated screenshots, code files, or generic documentation), note this clearly in the summary. Explain what you expected to find vs. what was actually provided, and suggest the user verify they selected the correct files. Still produce the best analysis you can with whatever content is available.
+IMPORTANT: If the selected content does not contain valid user stories, fail explicitly rather than inventing requirements or returning a successful empty assessment.
 
 Only return the JSON object, no additional text."""
 
@@ -601,43 +539,8 @@ Only return the JSON object, no additional text."""
         )
         return _collect_stream(resp)
 
-    try:
-        response_text = await asyncio.to_thread(_call_completion)
-    except Exception as e:
-        logger.error("Analysis API call failed: %s", e, exc_info=True)
-        response_text = ""
-    if not isinstance(response_text, str):
-        response_text = ""
-
-    try:
-        if "```json" in response_text:
-            response_text = response_text.split("```json")[1].split("```")[0]
-        elif "```" in response_text:
-            response_text = response_text.split("```")[1].split("```")[0]
-
-        return json.loads(response_text.strip())
-    except json.JSONDecodeError:
-        # Try to repair truncated JSON by closing open brackets/braces
-        repaired = _repair_truncated_json(response_text.strip())
-        if repaired:
-            try:
-                return json.loads(repaired)
-            except json.JSONDecodeError:
-                pass
-        logger.error("Analysis JSON parse failed (len=%d). End: %.300s", len(response_text), response_text[-300:])
-        return {
-            "summary": "Analysis completed but response parsing failed",
-            "raw_analysis": response_text,
-            "coverage_score": 0,
-            "missing_entities": [],
-            "missing_relationships": [],
-            "cardinality_issues": [],
-            "orphaned_entities": [],
-            "missing_attributes": [],
-            "data_integrity_concerns": [],
-            "recommendations": [],
-            "user_story_coverage": []
-        }
+    response_text = await asyncio.to_thread(_call_completion)
+    return _validate_report(parse_json_object(response_text))
 
 
 # ============== Main Analysis Workflow ==============
@@ -647,105 +550,34 @@ async def run_erd_analysis(
     db: AsyncSession,
     api_key: Optional[str] = None,
     model: Optional[str] = None,
+    selected_files: Optional[List[Dict[str, Any]]] = None,
 ) -> WorkflowResult:
-    """
-    Run the complete ERD analysis workflow on a repository.
-    Uses TAMU API when api_key is provided (or from env).
-    """
-    repo_path = repository.local_path
-
+    """Analyze only the immutable selection captured when the job was created."""
     try:
-        # Get selected files
-        result = await db.execute(
-            select(DiscoveredFile).where(
-                DiscoveredFile.repository_id == repository.id
-            )
-        )
-        files = result.scalars().all()
-
-        selected = [f for f in files if f.is_selected_erd]
-
-        if not selected:
-            return WorkflowResult(
-                success=False,
-                error="No files selected. Please select at least one file for ERD analysis."
-            )
-
-        # Split selected files by actual extension — let users select anything
-        image_exts = {'.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.bmp'}
-        image_files = [f for f in selected if Path(f.file_path).suffix.lower() in image_exts]
-        text_files = [f for f in selected if Path(f.file_path).suffix.lower() not in image_exts]
-
-        # Extract UML from images (if any)
-        uml_structure = {"classes": [], "associations": [], "generalizations": [], "notes": []}
-        if image_files:
-            erd_image_paths = [str(Path(repo_path) / f.file_path) for f in image_files]
-            uml_structure = await extract_uml_from_multiple_images(
-                erd_image_paths, api_key=api_key, model=model
-            )
-
-        # For text files: try to extract ERD structure first, then treat
-        # the rest as user stories.  This lets markdown/text ERDs work.
-        story_paths = []
-        if text_files:
-            for tf in text_files:
-                full_path = Path(repo_path) / tf.file_path
-                try:
-                    content = full_path.read_text(encoding='utf-8', errors='ignore')
-                except Exception:
-                    content = ""
-
-                if not content.strip():
-                    continue
-
-                # Only attempt text-based ERD extraction when we still have
-                # no classes (from images or a prior text file).
-                if not uml_structure.get("classes"):
-                    text_uml = await extract_uml_from_text(
-                        content, tf.file_path, api_key=api_key, model=model
-                    )
-                    if text_uml.get("classes"):
-                        # Merge into uml_structure
-                        existing = {c["name"] for c in uml_structure["classes"]}
-                        for cls in text_uml.get("classes", []):
-                            if cls["name"] not in existing:
-                                uml_structure["classes"].append(cls)
-                                existing.add(cls["name"])
-                        uml_structure["associations"].extend(text_uml.get("associations", []))
-                        uml_structure["generalizations"].extend(text_uml.get("generalizations", []))
-                        uml_structure["notes"].extend(text_uml.get("notes", []))
-                        continue  # used as ERD, skip user-story path
-
-                # Otherwise treat as user story content
-                story_paths.append(tf.file_path)
-
-        user_stories = ""
-        if story_paths:
-            user_stories = read_user_stories_from_files(repo_path, story_paths)
-
-        # If we got nothing useful from either path, let the user know
-        if not uml_structure.get("classes") and not user_stories.strip():
-            return WorkflowResult(
-                success=False,
-                error="Could not extract any ERD structure or user stories from the selected files. "
-                      "Please verify that the selected files contain ERD diagrams or user story content."
-            )
-
-        # Run analysis
+        prepared = validate_selected_files(repository.local_path, selected_files)
+        images = [item["absolute_path"] for item in prepared if item["image"]]
+        texts = [(item["path"], item["content"]) for item in prepared if not item["image"]]
+        structures = []
+        for image in images:
+            structures.append(await extract_uml_from_erd(image, api_key=api_key, model=model))
+        stories = []
+        for relative, content in texts:
+            extracted = await extract_uml_from_text(content, relative, api_key=api_key, model=model)
+            if extracted["classes"]:
+                structures.append(extracted)
+            else:
+                stories.append(f"## From: {relative}\n\n{content}")
+        uml_structure = _merge_uml(structures)
+        if not uml_structure["classes"]:
+            raise ValueError("Selected files do not contain an ERD schema.")
+        if not stories:
+            raise ValueError("Select user-story files in addition to ERD schema files.")
         report = await analyze_uml_against_stories(
-            uml_structure, user_stories, api_key=api_key, model=model
+            uml_structure, "\n\n---\n\n".join(stories), api_key=api_key, model=model
         )
-        coverage_score = report.get('coverage_score', 0)
-
         return WorkflowResult(
-            success=True,
-            uml_structure=uml_structure,
-            report=report,
-            coverage_score=coverage_score
+            success=True, uml_structure=uml_structure, report=report,
+            coverage_score=report["coverage_score"],
         )
-
-    except Exception as e:
-        return WorkflowResult(
-            success=False,
-            error=f"Analysis workflow failed: {str(e)}"
-        )
+    except Exception as exc:
+        return WorkflowResult(success=False, error=f"Analysis workflow failed: {exc}")

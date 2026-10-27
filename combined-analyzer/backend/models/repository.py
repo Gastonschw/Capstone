@@ -89,7 +89,7 @@ class DiscoveredFile(Base):
     __tablename__ = "discovered_files"
 
     id = Column(Integer, primary_key=True, index=True)
-    repository_id = Column(Integer, ForeignKey("repositories.id"), nullable=False)
+    repository_id = Column(Integer, ForeignKey("repositories.id", ondelete="CASCADE"), nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     # File metadata

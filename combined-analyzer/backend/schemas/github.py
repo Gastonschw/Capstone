@@ -5,6 +5,11 @@ Pydantic schemas for GitHub OAuth.
 from pydantic import BaseModel
 from typing import Optional
 
+class GitHubAuthResponse(BaseModel):
+    """Authorization URL for a verified, browser-bound OAuth flow."""
+    authorization_url: str
+
+
 
 class GitHubAuthStatus(BaseModel):
     """Response for GitHub authentication status."""

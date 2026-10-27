@@ -2,7 +2,7 @@
 Correctness Analysis model (ISO 25010 Functional Correctness focus).
 """
 
-from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, Float
+from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, Float, JSON
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
@@ -20,7 +20,8 @@ class CorrectnessAnalysis(Base):
     __tablename__ = "correctness_analyses"
 
     id = Column(Integer, primary_key=True, index=True)
-    repository_id = Column(Integer, ForeignKey("repositories.id"), nullable=False)
+    repository_id = Column(Integer, ForeignKey("repositories.id", ondelete="CASCADE"), nullable=False)
+    selected_files = Column(JSON, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     completed_at = Column(DateTime(timezone=True), nullable=True)
 

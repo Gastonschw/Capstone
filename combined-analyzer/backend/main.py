@@ -8,10 +8,10 @@ into a unified platform.
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
+from sqlalchemy import text
 
 from config import DATABASE_KIND, FRONTEND_URL
-from database import init_db
+from database import init_db, engine, AsyncSessionLocal
 from routers import (
     repositories_router,
     github_router,
@@ -29,11 +29,25 @@ from routers import (
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Application lifespan: initialize database on startup."""
-    await init_db()
-    db_label = "Supabase (Postgres)" if DATABASE_KIND == "postgres" else "SQLite"
-    print(f"Database: {db_label}")
-    yield
+    """Migrate and reconcile interrupted jobs before accepting requests."""
+    from services.analysis_lifecycle import recover_interrupted_analyses
+
+    # In-process jobs and a local persistent disk require one application worker.
+    # Holding a database session lock prevents a second worker from invalidating
+    # live jobs during startup recovery.
+    async with engine.connect() as guard:
+        acquired = await guard.scalar(text("select pg_try_advisory_lock(2710202602)"))
+        if not acquired:
+            raise RuntimeError("Another analyzer worker is running; deploy exactly one worker")
+        try:
+            await init_db()
+            async with AsyncSessionLocal() as session:
+                await recover_interrupted_analyses(session)
+            print("Database: Supabase (Postgres)")
+            yield
+        finally:
+            await guard.execute(text("select pg_advisory_unlock(2710202602)"))
+    await engine.dispose()
 
 
 app = FastAPI(

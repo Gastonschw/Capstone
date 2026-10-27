@@ -4,13 +4,12 @@ ERD Analysis API routes.
 
 import json
 from typing import List, Optional
-from datetime import datetime
+from datetime import datetime, timezone
 from fastapi import APIRouter, Body, Depends, Header, HTTPException, BackgroundTasks, Request
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
-from config import DATABASE_URL
 from database import get_db, AsyncSessionLocal
 from models.repository import Repository
 from models.erd_analysis import ERDAnalysis, AnalysisStatus
@@ -18,6 +17,7 @@ from schemas.erd_analysis import ERDAnalysisResponse, ERDAnalysisListItem
 from services.erd_analysis_service import run_erd_analysis
 from services.repository_access import require_analysis_access, require_repository_access
 from concurrency import analysis_semaphore
+from services.analysis_lifecycle import snapshot_selected_files, tracked_analysis, mark_analysis_failed
 
 router = APIRouter(prefix="/api/erd", tags=["erd-analysis"])
 
@@ -27,12 +27,13 @@ class StartERDAnalysisRequest(BaseModel):
     model: Optional[str] = None
 
 
+@tracked_analysis(ERDAnalysis)
 async def run_analysis_task(
     analysis_id: int,
     repository_id: int,
-    db_url: str,
     api_key: Optional[str] = None,
     model: Optional[str] = None,
+    selected_files: Optional[list[dict[str, str]]] = None,
 ):
     """Background task to run ERD analysis."""
     async with analysis_semaphore, AsyncSessionLocal() as db:
@@ -47,8 +48,10 @@ async def run_analysis_task(
         )
         repository = result.scalar_one_or_none()
 
-        if not analysis or not repository:
+        if not analysis:
             return
+        if not repository:
+            raise ValueError("Repository is no longer available.")
 
         try:
             # Update status to processing
@@ -56,7 +59,7 @@ async def run_analysis_task(
             await db.commit()
 
             # Run the analysis
-            workflow_result = await run_erd_analysis(repository, db, api_key=api_key, model=model)
+            workflow_result = await run_erd_analysis(repository, db, api_key=api_key, model=model, selected_files=selected_files)
 
             if workflow_result.success:
                 analysis.status = AnalysisStatus.completed.value
@@ -69,14 +72,11 @@ async def run_analysis_task(
                 if workflow_result.uml_structure:
                     analysis.uml_structure = json.dumps(workflow_result.uml_structure)
 
-            analysis.completed_at = datetime.utcnow()
+            analysis.completed_at = datetime.now(timezone.utc)
             await db.commit()
 
         except Exception as e:
-            analysis.status = AnalysisStatus.failed.value
-            analysis.error_message = str(e)
-            analysis.completed_at = datetime.utcnow()
-            await db.commit()
+            await mark_analysis_failed(db, ERDAnalysis, analysis_id, e)
 
 
 def _get_tamu_api_key(body: Optional[StartERDAnalysisRequest], header_key: Optional[str]) -> Optional[str]:
@@ -98,7 +98,8 @@ async def start_erd_analysis(
     tamu_api_key: Optional[str] = Header(default=None, alias="X-TAMU-API-Key"),
 ):
     """Start an ERD analysis for a repository. Uses TAMU API key from body or header."""
-    await require_repository_access(request, db, repository_id)
+    repository = await require_repository_access(request, db, repository_id, with_discovered_files=True)
+    selected_files = snapshot_selected_files(repository, "erd")
 
     api_key = _get_tamu_api_key(body, tamu_api_key)
     model = (body.model and body.model.strip()) if body else None
@@ -114,6 +115,7 @@ async def start_erd_analysis(
     # Create analysis record
     analysis = ERDAnalysis(
         repository_id=repository_id,
+        selected_files=selected_files,
         status=AnalysisStatus.pending.value
     )
     db.add(analysis)
@@ -125,9 +127,9 @@ async def start_erd_analysis(
         run_analysis_task,
         analysis.id,
         repository_id,
-        DATABASE_URL,
         api_key,
         model,
+        selected_files=selected_files,
     )
 
     return {
@@ -157,6 +159,7 @@ async def list_erd_analyses(
             id=a.id,
             repository_id=a.repository_id,
             status=a.status,
+            selected_files=a.selected_files,
             coverage_score=a.coverage_score,
             created_at=a.created_at,
             completed_at=a.completed_at
@@ -178,6 +181,7 @@ async def get_erd_analysis(
         id=analysis.id,
         repository_id=analysis.repository_id,
         status=analysis.status,
+        selected_files=analysis.selected_files,
         error_message=analysis.error_message,
         uml_structure=json.loads(analysis.uml_structure) if analysis.uml_structure else None,
         report=json.loads(analysis.report) if analysis.report else None,

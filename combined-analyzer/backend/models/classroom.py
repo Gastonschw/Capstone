@@ -49,7 +49,7 @@ class ClassAdmin(Base):
     )
 
     id = Column(PG_UUID(as_uuid=True), primary_key=True, index=True, server_default=text("gen_random_uuid()"))
-    class_id = Column(PG_UUID(as_uuid=True), ForeignKey("classes.id"), nullable=False)
+    class_id = Column(PG_UUID(as_uuid=True), ForeignKey("classes.id", ondelete="CASCADE"), nullable=False)
     user_id = Column(PG_UUID(as_uuid=True), nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
@@ -65,7 +65,7 @@ class ClassMember(Base):
     )
 
     id = Column(PG_UUID(as_uuid=True), primary_key=True, index=True, server_default=text("gen_random_uuid()"))
-    class_id = Column(PG_UUID(as_uuid=True), ForeignKey("classes.id"), nullable=False)
+    class_id = Column(PG_UUID(as_uuid=True), ForeignKey("classes.id", ondelete="CASCADE"), nullable=False)
     user_id = Column(PG_UUID(as_uuid=True), nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 

@@ -17,16 +17,16 @@ from dataclasses import dataclass
 logger = logging.getLogger(__name__)
 
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
 
-from models.repository import Repository, DiscoveredFile
+from models.repository import Repository
 from services.integrity_analysis_service import (
     _tamu_completion,
     parse_json_response,
     prepare_file_contents,
     CharacteristicReport,
-    _description_from_result,
-    _log_incomplete_response,
+    validate_characteristic_response,
+    validate_summary_response,
+    validate_selected_files,
 )
 
 
@@ -78,18 +78,18 @@ Respond with a JSON object:
 }}"""
 
         response_text = await asyncio.to_thread(_tamu_completion, api_key, prompt, 4096, model)
-        result = parse_json_response(response_text)
-        default_desc = "No structured result from model (check API key and response format)." if not result else "Analysis incomplete"
-        desc = _description_from_result(result, default_desc)
-        _log_incomplete_response(characteristic, result, response_text or "")
+        result = validate_characteristic_response(parse_json_response(response_text))
+        
+        desc = result['description']
+        
 
         return CharacteristicReport(
             characteristic=characteristic,
-            score=result.get("score", 50),
-            status=result.get("status", "partially_fulfilled"),
+            score=result["score"],
+            status=result["status"],
             description=desc,
-            findings=result.get("findings", []),
-            recommendations=result.get("recommendations", [])
+            findings=result["findings"],
+            recommendations=result["recommendations"]
         )
 
     return analyze
@@ -224,7 +224,7 @@ Respond with a JSON object:
 }}"""
 
     response_text = await asyncio.to_thread(_tamu_completion, api_key, prompt, 2048, model)
-    return parse_json_response(response_text)
+    return validate_summary_response(parse_json_response(response_text))
 
 
 async def run_usability_analysis(
@@ -232,22 +232,12 @@ async def run_usability_analysis(
     db: AsyncSession,
     api_key: Optional[str] = None,
     model: Optional[str] = None,
+    selected_files: Optional[List[Dict]] = None,
 ) -> UsabilityAnalysisResult:
     """Main orchestrator: Runs the complete usability analysis workflow."""
     repo_path = repository.local_path
 
-    result = await db.execute(
-        select(DiscoveredFile).where(
-            DiscoveredFile.repository_id == repository.id,
-            DiscoveredFile.is_selected_usability == True
-        )
-    )
-    files = result.scalars().all()
-
-    if not files:
-        raise ValueError("No files selected for usability analysis")
-
-    file_list = [{'file_path': f.file_path, 'file_type': f.file_type} for f in files]
+    file_list = validate_selected_files(repo_path, selected_files)
 
     appropriateness_recognizability = await analyze_appropriateness_recognizability(repo_path, file_list, api_key, model)
     learnability = await analyze_learnability(repo_path, file_list, api_key, model)
@@ -273,6 +263,6 @@ async def run_usability_analysis(
         self_descriptiveness=self_descriptiveness,
         inclusivity=inclusivity,
         user_assistance=user_assistance,
-        overall_score=summary.get('overall_score', 50),
+        overall_score=summary['overall_score'],
         summary=summary
     )

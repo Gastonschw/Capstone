@@ -13,18 +13,20 @@ from pathlib import Path
 from typing import List, Dict, Any, AsyncGenerator, Optional
 
 import httpx
-from openai import OpenAI
+from openai import AsyncOpenAI, OpenAI
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from dotenv import load_dotenv
 
-from models.repository import Repository, DiscoveredFile, FileType
+from models.repository import Repository, FileType
+from types import SimpleNamespace
 from models.erd_analysis import ERDAnalysis
 from models.integrity_analysis import IntegrityAnalysis
 from models.compliance_analysis import ComplianceAnalysis
 from models.correctness_analysis import CorrectnessAnalysis
 from models.usability_analysis import UsabilityAnalysis
 from models.maintainability_analysis import MaintainabilityAnalysis
+from config import MAX_ANALYSIS_SOURCE_BYTES
 
 load_dotenv()
 
@@ -50,11 +52,35 @@ def resolve_api_key(api_key: Optional[str] = None) -> str:
 
 
 def get_client(api_key: Optional[str] = None):
-    """Get OpenAI client configured for TAMU API."""
+    """Synchronous client for analysis calls executed in worker threads."""
     return OpenAI(
         api_key=resolve_api_key(api_key),
         base_url=TAMU_API_BASE,
     )
+
+
+def get_async_client(api_key: Optional[str] = None):
+    """Nonblocking client for ASGI chat streaming."""
+    return AsyncOpenAI(
+        api_key=resolve_api_key(api_key),
+        base_url=TAMU_API_BASE,
+    )
+
+async def _stream_messages(messages, model, api_key):
+    """Close the asynchronous HTTP client and stream even on cancellation."""
+    async with get_async_client(api_key=api_key) as client:
+        stream = await client.chat.completions.create(
+            model=model or TAMU_DEFAULT_MODEL,
+            max_tokens=2048,
+            messages=messages,
+            stream=True,
+            temperature=1,
+        )
+        async with stream:
+            async for chunk in stream:
+                if chunk.choices and chunk.choices[0].delta.content:
+                    yield chunk.choices[0].delta.content
+
 
 
 async def fetch_tamu_models(api_key: Optional[str] = None) -> List[Dict[str, str]]:
@@ -110,7 +136,9 @@ def encode_image_to_base64(image_path: str) -> tuple[str, str]:
         ".webp": "image/webp"
     }
 
-    media_type = media_type_map.get(suffix, "image/png")
+    if suffix not in media_type_map:
+        raise ValueError(f"Unsupported image format: {suffix}; select PNG, JPEG, GIF, or WebP")
+    media_type = media_type_map[suffix]
 
     with open(image_path, "rb") as f:
         image_data = base64.standard_b64encode(f.read()).decode("utf-8")
@@ -118,16 +146,33 @@ def encode_image_to_base64(image_path: str) -> tuple[str, str]:
     return image_data, media_type
 
 
-def read_file_content(file_path: str, max_chars: int = 10000) -> str:
-    """Read file content with optional truncation."""
-    try:
-        with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-            content = f.read()
-        if len(content) > max_chars:
-            content = content[:max_chars] + "\n... (truncated)"
-        return content
-    except Exception as e:
-        return f"[Error reading file: {e}]"
+def read_file_content(file_path: str) -> str:
+    """Read complete source; missing or empty input is not valid chat context."""
+    content = Path(file_path).read_text(encoding="utf-8")
+    if not content.strip():
+        raise ValueError(f"Selected source is empty: {file_path}")
+    return content
+
+
+def snapshot_files(analysis, repo_path: str):
+    """Legacy runs cannot safely reconstruct their historical selection."""
+    snapshot = analysis.selected_files
+    if not isinstance(snapshot, list) or not snapshot:
+        raise ValueError("This analysis has no saved input snapshot. Run a new analysis before chatting.")
+    root = Path(repo_path).resolve()
+    total = 0
+    files = []
+    for entry in snapshot:
+        if not isinstance(entry, dict) or not isinstance(entry.get("file_path"), str):
+            raise ValueError("Analysis input snapshot is invalid; run a new analysis.")
+        path = (root / entry["file_path"]).resolve()
+        if not path.is_relative_to(root) or not path.is_file():
+            raise ValueError(f"Selected source is unavailable: {entry['file_path']}")
+        total += path.stat().st_size
+        files.append(SimpleNamespace(**entry))
+    if total > MAX_ANALYSIS_SOURCE_BYTES:
+        raise ValueError(f"Selected sources exceed chat's {MAX_ANALYSIS_SOURCE_BYTES}-byte context limit; run a new analysis with a smaller selection.")
+    return files
 
 
 async def build_erd_context(
@@ -143,16 +188,9 @@ async def build_erd_context(
     """
     repo_path = repository.local_path
 
-    # Get selected files
-    result = await db.execute(
-        select(DiscoveredFile).where(
-            DiscoveredFile.repository_id == repository.id
-        )
-    )
-    files = result.scalars().all()
-
-    erd_files = [f for f in files if f.file_type == FileType.erd_image.value and f.is_selected_erd]
-    story_files = [f for f in files if f.file_type == FileType.user_story.value and f.is_selected_erd]
+    files = snapshot_files(analysis, repo_path)
+    erd_files = [f for f in files if f.file_type == FileType.erd_image.value]
+    story_files = [f for f in files if f.file_type != FileType.erd_image.value]
 
     # Build user stories content
     user_stories_content = ""
@@ -218,18 +256,12 @@ async def build_erd_context(
     # Build image content blocks for the ERD images (OpenAI vision format)
     image_blocks = []
     for f in erd_files:
-        try:
-            full_path = Path(repo_path) / f.file_path
-            image_data, media_type = encode_image_to_base64(str(full_path))
-            image_blocks.append({
-                "type": "image_url",
-                "image_url": {
-                    "url": f"data:{media_type};base64,{image_data}"
-                }
-            })
-        except Exception as e:
-            # Skip images that can't be loaded
-            pass
+        full_path = Path(repo_path) / f.file_path
+        image_data, media_type = encode_image_to_base64(str(full_path))
+        image_blocks.append({
+            "type": "image_url",
+            "image_url": {"url": f"data:{media_type};base64,{image_data}"},
+        })
 
     return system_prompt, image_blocks
 
@@ -247,23 +279,8 @@ async def build_integrity_context(
     """
     repo_path = repository.local_path
 
-    # Get selected files
-    result = await db.execute(
-        select(DiscoveredFile).where(
-            DiscoveredFile.repository_id == repository.id,
-            DiscoveredFile.is_selected_integrity == True
-        )
-    )
-    files = result.scalars().all()
-
-    # Build code file summaries (not full content to save tokens)
-    code_files_summary = []
-    for f in files[:20]:  # Limit to 20 files
-        full_path = Path(repo_path) / f.file_path
-        content = read_file_content(str(full_path), max_chars=3000)
-        code_files_summary.append(f"### {f.file_path}\n```\n{content}\n```")
-
-    code_context = "\n\n".join(code_files_summary)
+    files = snapshot_files(analysis, repo_path)
+    code_context = _build_code_context(files, repo_path)
 
     # Parse characteristic reports
     def parse_report(report_json):
@@ -380,8 +397,7 @@ async def stream_erd_chat(
     analysis = result.scalar_one_or_none()
 
     if not analysis:
-        yield "Error: Analysis not found"
-        return
+        raise ValueError("Analysis not found")
 
     result = await db.execute(
         select(Repository).where(Repository.id == analysis.repository_id)
@@ -389,8 +405,7 @@ async def stream_erd_chat(
     repository = result.scalar_one_or_none()
 
     if not repository:
-        yield "Error: Repository not found"
-        return
+        raise ValueError("Repository not found")
 
     # Build context
     system_prompt, image_blocks = await build_erd_context(analysis, repository, db)
@@ -407,8 +422,8 @@ async def stream_erd_chat(
             "content": msg["content"]
         })
 
-    # Add current message with images (only on first message to save tokens)
-    if image_blocks and len(history) == 0:
+    # Include the original diagram on each turn, not just the first request.
+    if image_blocks:
         messages.append({
             "role": "user",
             "content": [
@@ -422,21 +437,8 @@ async def stream_erd_chat(
             "content": message
         })
 
-    # Stream response using OpenAI client
-    client = get_client(api_key=api_key)
-    resolved_model = model or TAMU_DEFAULT_MODEL
-
-    stream = client.chat.completions.create(
-        model=resolved_model,
-        max_tokens=2048,
-        messages=messages,
-        stream=True,
-        temperature=1,
-    )
-
-    for chunk in stream:
-        if chunk.choices and chunk.choices[0].delta.content:
-            yield chunk.choices[0].delta.content
+    async for chunk in _stream_messages(messages, model, api_key):
+        yield chunk
 
 
 def _parse_report(report_json):
@@ -449,12 +451,12 @@ def _parse_report(report_json):
         return {}
 
 
-def _build_code_context(files, repo_path: str, max_files: int = 20) -> str:
-    """Build code files context string from selected files."""
+def _build_code_context(files, repo_path: str) -> str:
+    """Include every snapshotted source without silent truncation."""
     code_files_summary = []
-    for f in files[:max_files]:
+    for f in files:
         full_path = Path(repo_path) / f.file_path
-        content = read_file_content(str(full_path), max_chars=3000)
+        content = read_file_content(str(full_path))
         code_files_summary.append(f"### {f.file_path}\n```\n{content}\n```")
     return "\n\n".join(code_files_summary)
 
@@ -473,7 +475,6 @@ Recommendations: {json.dumps(report.get('recommendations', []), indent=2)}""")
 
 async def _stream_analysis_chat(
     model_class,
-    selection_field: str,
     build_context_fn,
     analysis_id: int,
     message: str,
@@ -489,8 +490,7 @@ async def _stream_analysis_chat(
     analysis = result.scalar_one_or_none()
 
     if not analysis:
-        yield "Error: Analysis not found"
-        return
+        raise ValueError("Analysis not found")
 
     result = await db.execute(
         select(Repository).where(Repository.id == analysis.repository_id)
@@ -498,8 +498,7 @@ async def _stream_analysis_chat(
     repository = result.scalar_one_or_none()
 
     if not repository:
-        yield "Error: Repository not found"
-        return
+        raise ValueError("Repository not found")
 
     system_prompt = await build_context_fn(analysis, repository, db)
 
@@ -508,20 +507,8 @@ async def _stream_analysis_chat(
         messages.append({"role": msg["role"], "content": msg["content"]})
     messages.append({"role": "user", "content": message})
 
-    client = get_client(api_key=api_key)
-    resolved_model = model or TAMU_DEFAULT_MODEL
-
-    stream_resp = client.chat.completions.create(
-        model=resolved_model,
-        max_tokens=2048,
-        messages=messages,
-        stream=True,
-        temperature=1,
-    )
-
-    for chunk in stream_resp:
-        if chunk.choices and chunk.choices[0].delta.content:
-            yield chunk.choices[0].delta.content
+    async for chunk in _stream_messages(messages, model, api_key):
+        yield chunk
 
 
 async def stream_integrity_chat(
@@ -544,8 +531,7 @@ async def stream_integrity_chat(
     analysis = result.scalar_one_or_none()
 
     if not analysis:
-        yield "Error: Analysis not found"
-        return
+        raise ValueError("Analysis not found")
 
     result = await db.execute(
         select(Repository).where(Repository.id == analysis.repository_id)
@@ -553,8 +539,7 @@ async def stream_integrity_chat(
     repository = result.scalar_one_or_none()
 
     if not repository:
-        yield "Error: Repository not found"
-        return
+        raise ValueError("Repository not found")
 
     # Build context
     system_prompt = await build_integrity_context(analysis, repository, db)
@@ -577,33 +562,14 @@ async def stream_integrity_chat(
         "content": message
     })
 
-    # Stream response using OpenAI client
-    client = get_client(api_key=api_key)
-    resolved_model = model or TAMU_DEFAULT_MODEL
-
-    integrity_stream = client.chat.completions.create(
-        model=resolved_model,
-        max_tokens=2048,
-        messages=messages,
-        stream=True,
-        temperature=1,
-    )
-
-    for chunk in integrity_stream:
-        if chunk.choices and chunk.choices[0].delta.content:
-            yield chunk.choices[0].delta.content
+    async for chunk in _stream_messages(messages, model, api_key):
+        yield chunk
 
 
 async def build_compliance_context(
     analysis: ComplianceAnalysis, repository: Repository, db: AsyncSession
 ) -> str:
-    result = await db.execute(
-        select(DiscoveredFile).where(
-            DiscoveredFile.repository_id == repository.id,
-            DiscoveredFile.is_selected_compliance == True
-        )
-    )
-    files = result.scalars().all()
+    files = snapshot_files(analysis, repository.local_path)
     code_context = _build_code_context(files, repository.local_path)
     summary = _parse_report(analysis.summary_report)
     reports = [
@@ -645,7 +611,7 @@ async def stream_compliance_chat(
     db: AsyncSession, model: Optional[str] = None, api_key: Optional[str] = None
 ) -> AsyncGenerator[str, None]:
     async for chunk in _stream_analysis_chat(
-        ComplianceAnalysis, "is_selected_compliance", build_compliance_context,
+        ComplianceAnalysis, build_compliance_context,
         analysis_id, message, history, db, model, api_key
     ):
         yield chunk
@@ -654,13 +620,7 @@ async def stream_compliance_chat(
 async def build_correctness_context(
     analysis: CorrectnessAnalysis, repository: Repository, db: AsyncSession
 ) -> str:
-    result = await db.execute(
-        select(DiscoveredFile).where(
-            DiscoveredFile.repository_id == repository.id,
-            DiscoveredFile.is_selected_correctness == True
-        )
-    )
-    files = result.scalars().all()
+    files = snapshot_files(analysis, repository.local_path)
     code_context = _build_code_context(files, repository.local_path)
     summary = _parse_report(analysis.summary_report)
     reports = [
@@ -702,7 +662,7 @@ async def stream_correctness_chat(
     db: AsyncSession, model: Optional[str] = None, api_key: Optional[str] = None
 ) -> AsyncGenerator[str, None]:
     async for chunk in _stream_analysis_chat(
-        CorrectnessAnalysis, "is_selected_correctness", build_correctness_context,
+        CorrectnessAnalysis, build_correctness_context,
         analysis_id, message, history, db, model, api_key
     ):
         yield chunk
@@ -711,13 +671,7 @@ async def stream_correctness_chat(
 async def build_usability_context(
     analysis: UsabilityAnalysis, repository: Repository, db: AsyncSession
 ) -> str:
-    result = await db.execute(
-        select(DiscoveredFile).where(
-            DiscoveredFile.repository_id == repository.id,
-            DiscoveredFile.is_selected_usability == True
-        )
-    )
-    files = result.scalars().all()
+    files = snapshot_files(analysis, repository.local_path)
     code_context = _build_code_context(files, repository.local_path)
     summary = _parse_report(analysis.summary_report)
     reports = [
@@ -764,7 +718,7 @@ async def stream_usability_chat(
     db: AsyncSession, model: Optional[str] = None, api_key: Optional[str] = None
 ) -> AsyncGenerator[str, None]:
     async for chunk in _stream_analysis_chat(
-        UsabilityAnalysis, "is_selected_usability", build_usability_context,
+        UsabilityAnalysis, build_usability_context,
         analysis_id, message, history, db, model, api_key
     ):
         yield chunk
@@ -773,13 +727,7 @@ async def stream_usability_chat(
 async def build_maintainability_context(
     analysis: MaintainabilityAnalysis, repository: Repository, db: AsyncSession
 ) -> str:
-    result = await db.execute(
-        select(DiscoveredFile).where(
-            DiscoveredFile.repository_id == repository.id,
-            DiscoveredFile.is_selected_maintainability == True
-        )
-    )
-    files = result.scalars().all()
+    files = snapshot_files(analysis, repository.local_path)
     code_context = _build_code_context(files, repository.local_path)
     summary = _parse_report(analysis.summary_report)
     reports = [
@@ -823,7 +771,7 @@ async def stream_maintainability_chat(
     db: AsyncSession, model: Optional[str] = None, api_key: Optional[str] = None
 ) -> AsyncGenerator[str, None]:
     async for chunk in _stream_analysis_chat(
-        MaintainabilityAnalysis, "is_selected_maintainability", build_maintainability_context,
+        MaintainabilityAnalysis, build_maintainability_context,
         analysis_id, message, history, db, model, api_key
     ):
         yield chunk

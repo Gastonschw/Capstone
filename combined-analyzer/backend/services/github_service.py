@@ -4,7 +4,7 @@ GitHub OAuth and Repository Service
 Handles GitHub authentication, repository listing, and cloning.
 """
 
-import os
+import asyncio
 import uuid
 import shutil
 import tempfile
@@ -14,9 +14,9 @@ from urllib.parse import urlencode
 
 import httpx
 from cryptography.fernet import Fernet, InvalidToken
-from github import Github, GithubException
+from github import Github
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, text
+from sqlalchemy import select
 
 from config import (
     GITHUB_CLIENT_ID,
@@ -24,34 +24,10 @@ from config import (
     GITHUB_REDIRECT_URI,
     ENCRYPTION_KEY,
     REPOS_DIR,
-    DATABASE_KIND,
 )
 from models.github_token import GitHubToken
 from models.repository import Repository, RepositorySource
-
-
-def _optional_uuid(value: Optional[str]):
-    """Convert optional string to uuid.UUID for Postgres; returns None if empty or invalid."""
-    if not value:
-        return None
-    try:
-        return uuid.UUID(str(value))
-    except (ValueError, TypeError):
-        return None
-
-
-async def _user_exists_in_public_users(db: AsyncSession, uid: uuid.UUID) -> bool:
-    """Return True if the given uuid exists in public.users (Supabase). No-op for SQLite."""
-    if DATABASE_KIND != "postgres":
-        return False
-    try:
-        r = await db.execute(
-            text("SELECT 1 FROM public.users WHERE id = :uid"),
-            {"uid": uid},
-        )
-        return r.scalar_one_or_none() is not None
-    except Exception:
-        return False
+from services.user_service import require_registered_user
 
 
 # Initialize Fernet cipher
@@ -116,29 +92,11 @@ async def save_github_token(
     access_token: str,
     user_info: dict,
     *,
-    user_id: Optional[str] = None,
+    user_id: str,
 ) -> GitHubToken:
-    """Save or update GitHub token for a session. Optionally link to Supabase user (user_id)."""
-    # Only link user_id if that user exists in public.users (avoids FK violation if sync delayed)
-    link_uid = _optional_uuid(user_id)
-    if link_uid is not None and not await _user_exists_in_public_users(db, link_uid):
-        link_uid = None
-
-    # Check if token exists for this session
-    result = await db.execute(
-        select(GitHubToken).where(GitHubToken.session_id == session_id)
-    )
-    existing = result.scalar_one_or_none()
-
+    """Persist a fresh server-generated session for its registered owner."""
+    link_uid = await require_registered_user(db, user_id)
     encrypted_token = encrypt_token(access_token)
-
-    if existing:
-        existing.access_token_encrypted = encrypted_token
-        existing.github_user_id = str(user_info.get("id"))
-        existing.github_username = user_info.get("login")
-        existing.user_id = link_uid
-        await db.commit()
-        return existing
 
     token_record = GitHubToken(
         session_id=session_id,
@@ -153,10 +111,10 @@ async def save_github_token(
     return token_record
 
 
-async def get_github_token(db: AsyncSession, session_id: str) -> Optional[str]:
-    """Get decrypted GitHub token for a session."""
+async def get_github_token(db: AsyncSession, session_id: str, user_id: str) -> Optional[str]:
+    """Get a token only when both session and verified owner match."""
     result = await db.execute(
-        select(GitHubToken).where(GitHubToken.session_id == session_id)
+        select(GitHubToken).where(GitHubToken.session_id == session_id, GitHubToken.user_id == uuid.UUID(user_id))
     )
     token_record = result.scalar_one_or_none()
     if token_record:
@@ -170,10 +128,10 @@ async def get_github_token(db: AsyncSession, session_id: str) -> Optional[str]:
     return None
 
 
-async def get_github_auth_status(db: AsyncSession, session_id: str) -> dict:
-    """Check if a session has valid GitHub auth."""
+async def get_github_auth_status(db: AsyncSession, session_id: str, user_id: str) -> dict:
+    """Check an owner-bound session."""
     result = await db.execute(
-        select(GitHubToken).where(GitHubToken.session_id == session_id)
+        select(GitHubToken).where(GitHubToken.session_id == session_id, GitHubToken.user_id == uuid.UUID(user_id))
     )
     token_record = result.scalar_one_or_none()
     if token_record:
@@ -186,24 +144,15 @@ async def get_github_auth_status(db: AsyncSession, session_id: str) -> dict:
 
 def list_github_repos(access_token: str) -> List[dict]:
     """List repositories accessible to the authenticated user."""
-    g = Github(access_token)
-    user = g.get_user()
-
-    repos = []
-    for repo in user.get_repos(sort="updated"):
-        repos.append({
+    with Github(access_token) as github:
+        return [{
             "full_name": repo.full_name,
             "name": repo.name,
             "description": repo.description,
             "private": repo.private,
             "html_url": repo.html_url,
             "default_branch": repo.default_branch,
-        })
-        # Limit to 50 repos for performance
-        if len(repos) >= 50:
-            break
-
-    return repos
+        } for repo in github.get_user().get_repos(sort="updated")]
 
 
 async def clone_github_repo(
@@ -213,66 +162,56 @@ async def clone_github_repo(
     *,
     owner_user_id: Optional[str] = None,
 ) -> Repository:
-    """Clone a GitHub repository and create a Repository record."""
-    link_uid = _optional_uuid(owner_user_id)
-    if link_uid is not None and not await _user_exists_in_public_users(db, link_uid):
-        link_uid = None
+    """Download safely in a worker, then flush into the caller's transaction."""
+    from services.folder_service import extract_zip_safely, flatten_single_root_directory, run_file_operation, CHUNK_SIZE
+    from config import MAX_UPLOAD_SIZE
 
-    g = Github(access_token)
+    link_uid = await require_registered_user(db, owner_user_id)
+    repo_path = REPOS_DIR / str(uuid.uuid4())
+
+    def download():
+        with Github(access_token) as github:
+            repo = github.get_repo(repo_full_name)
+            archive_url = repo.get_archive_link("zipball", ref=repo.default_branch)
+            repo_path.mkdir(parents=True, exist_ok=False)
+            with tempfile.TemporaryDirectory(prefix="github-download-") as temporary:
+                zip_path = Path(temporary) / "archive.zip"
+                with httpx.Client(follow_redirects=True, timeout=60) as client:
+                    with client.stream("GET", archive_url) as response:
+                        response.raise_for_status()
+                        size = 0
+                        with zip_path.open("wb") as destination:
+                            for chunk in response.iter_bytes(CHUNK_SIZE):
+                                size += len(chunk)
+                                if size > MAX_UPLOAD_SIZE:
+                                    raise ValueError("Compressed archive exceeds upload limit")
+                                destination.write(chunk)
+                extract_zip_safely(zip_path, repo_path)
+            flatten_single_root_directory(repo_path)
+            return repo.name, repo.html_url
 
     try:
-        repo = g.get_repo(repo_full_name)
-    except GithubException as e:
-        raise ValueError(f"Could not access repository: {e}")
-
-    # Create unique directory for this repo
-    repo_uuid = str(uuid.uuid4())
-    repo_path = REPOS_DIR / repo_uuid
-    repo_path.mkdir(parents=True, exist_ok=True)
-
-    # Download repo as ZIP and extract
-    archive_url = repo.get_archive_link("zipball", ref=repo.default_branch)
-
-    with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as tmp_file:
-        tmp_path = tmp_file.name
-
-        # Download the archive
-        import urllib.request
-        urllib.request.urlretrieve(archive_url, tmp_path)
-
-    # Extract the archive
-    shutil.unpack_archive(tmp_path, repo_path)
-    os.unlink(tmp_path)
-
-    # GitHub archives have a root folder like "owner-repo-hash", move contents up
-    extracted_items = list(repo_path.iterdir())
-    if len(extracted_items) == 1 and extracted_items[0].is_dir():
-        # Move all contents from subdirectory to repo_path
-        sub_dir = extracted_items[0]
-        for item in sub_dir.iterdir():
-            shutil.move(str(item), str(repo_path / item.name))
-        sub_dir.rmdir()
-
-    # Create Repository record (optionally linked to Supabase user)
-    repository = Repository(
-        name=repo.name,
-        source_type=RepositorySource.github.value,
-        github_url=repo.html_url,
-        github_repo_full_name=repo_full_name,
-        local_path=str(repo_path),
-        owner_user_id=link_uid,
-    )
-    db.add(repository)
-    await db.commit()
-    await db.refresh(repository)
-
-    return repository
+        name, html_url = await run_file_operation(download)
+        repository = Repository(
+            name=name,
+            source_type=RepositorySource.github.value,
+            github_url=html_url,
+            github_repo_full_name=repo_full_name,
+            local_path=str(repo_path),
+            owner_user_id=link_uid,
+        )
+        db.add(repository)
+        await db.flush()
+        return repository
+    except BaseException:
+        shutil.rmtree(repo_path, ignore_errors=True)
+        raise
 
 
-async def delete_github_token(db: AsyncSession, session_id: str) -> bool:
-    """Delete GitHub token for a session (logout)."""
+async def delete_github_token(db: AsyncSession, session_id: str, user_id: str) -> bool:
+    """Delete only the verified owner's session."""
     result = await db.execute(
-        select(GitHubToken).where(GitHubToken.session_id == session_id)
+        select(GitHubToken).where(GitHubToken.session_id == session_id, GitHubToken.user_id == uuid.UUID(user_id))
     )
     token_record = result.scalar_one_or_none()
     if token_record:

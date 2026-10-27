@@ -56,6 +56,7 @@ class ERDAnalysisResponse(BaseModel):
     id: int
     repository_id: int
     status: str
+    selected_files: Optional[list[dict[str, str]]] = None
     error_message: Optional[str] = None
     uml_structure: Optional[Dict[str, Any]] = None
     report: Optional[Dict[str, Any]] = None
@@ -72,6 +73,7 @@ class ERDAnalysisListItem(BaseModel):
     id: int
     repository_id: int
     status: str
+    selected_files: Optional[list[dict[str, str]]] = None
     coverage_score: Optional[float] = None
     created_at: datetime
     completed_at: Optional[datetime] = None

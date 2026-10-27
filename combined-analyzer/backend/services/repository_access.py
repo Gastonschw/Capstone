@@ -9,15 +9,13 @@ import uuid
 from typing import Type, TypeVar
 
 from fastapi import HTTPException, Request
-from sqlalchemy import select
+from sqlalchemy import select, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from config import DATABASE_KIND
-from dependencies import get_optional_user_id
-from models.classroom import Class, ClassMember
+from dependencies import get_current_user_id
+from models.classroom import Class, ClassAdmin, ClassMember
 from models.repository import Repository
-from services.user_service import get_user_role
 
 AnalysisT = TypeVar("AnalysisT")
 
@@ -27,17 +25,15 @@ async def admin_teaches_student(
     admin_uuid: uuid.UUID,
     student_uuid: uuid.UUID,
 ) -> bool:
-    """True if admin_uuid owns a class containing student_uuid."""
-    if DATABASE_KIND != "postgres":
-        return False
-    role = await get_user_role(db, admin_uuid)
-    if role != "admin":
-        return False
+    """True if the caller creates or administers a class containing the student."""
     result = await db.execute(
         select(ClassMember.id)
         .join(Class, Class.id == ClassMember.class_id)
         .where(
-            Class.owner_user_id == admin_uuid,
+            or_(
+                Class.owner_user_id == admin_uuid,
+                Class.id.in_(select(ClassAdmin.class_id).where(ClassAdmin.user_id == admin_uuid)),
+            ),
             ClassMember.user_id == student_uuid,
         )
         .limit(1)
@@ -54,15 +50,9 @@ async def require_repository_access(
 ) -> Repository:
     """
     Load repository if caller may access it; otherwise raise 404 (no enumeration).
-    Requires X-User-Id. Repos without owner_user_id are not accessible.
+    Requires a verified bearer identity. Ownerless repositories are inaccessible.
     """
-    user_id_str = get_optional_user_id(request)
-    if not user_id_str:
-        raise HTTPException(status_code=401, detail="Authentication required")
-    try:
-        caller = uuid.UUID(user_id_str)
-    except ValueError as exc:
-        raise HTTPException(status_code=401, detail="Invalid user id") from exc
+    caller = uuid.UUID(await get_current_user_id(request))
 
     q = select(Repository).where(Repository.id == repository_id)
     if with_discovered_files:
@@ -92,6 +82,7 @@ async def require_analysis_access(
     model_cls: Type[AnalysisT],
 ) -> AnalysisT:
     """Load analysis row and ensure caller may access its repository."""
+    await get_current_user_id(request)
     result = await db.execute(select(model_cls).where(model_cls.id == analysis_id))
     analysis = result.scalar_one_or_none()
     if not analysis:

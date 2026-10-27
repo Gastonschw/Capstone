@@ -142,17 +142,9 @@ function getFileTypeLabel(fileType) {
 export default function FileList({ files, selectionField, onToggle, onSelectAll, scoreField, scoreLabel }) {
   const [searchValue, setSearchValue] = useState('');
 
-  if (!files || files.length === 0) {
-    return (
-      <div style={styles.emptyState}>
-        <div style={styles.emptyIcon}>&#128193;</div>
-        <p>No files discovered</p>
-      </div>
-    );
-  }
 
   const filteredFiles = useMemo(() => {
-    let result = [...files];
+    let result = [...(files || [])];
     const query = searchValue.trim().toLowerCase();
     if (query) {
       result = result.filter((f) => {
@@ -172,6 +164,14 @@ export default function FileList({ files, selectionField, onToggle, onSelectAll,
     });
     return result;
   }, [files, searchValue, selectionField, scoreField]);
+  if (!files || files.length === 0) {
+    return (
+      <div style={styles.emptyState}>
+        <div style={styles.emptyIcon}>&#128193;</div>
+        <p>No files discovered</p>
+      </div>
+    );
+  }
 
   const allSelected = filteredFiles.length > 0 && filteredFiles.every((f) => f[selectionField]);
   const someSelected = filteredFiles.some((f) => f[selectionField]);

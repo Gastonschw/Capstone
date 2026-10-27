@@ -29,23 +29,11 @@ from schemas import (
     ClassAdminItem,
     ClassAdminsResponse,
 )
-from services.user_service import get_user_role
-from dependencies import get_optional_user_id
+from services.user_service import get_user_role, require_registered_user
+from dependencies import get_current_user_id
 
 router = APIRouter(prefix="/api/classes", tags=["classes"])
 
-
-def _require_current_user_id(request: Request) -> uuid.UUID:
-    user_id_str = get_optional_user_id(request)
-    if not user_id_str:
-        raise HTTPException(
-            status_code=401,
-            detail="Supabase user id is required (X-User-Id header) to use classes.",
-        )
-    try:
-        return uuid.UUID(user_id_str)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid Supabase user id")
 
 
 def _parse_uuid(value: str, label: str) -> uuid.UUID:
@@ -148,7 +136,8 @@ async def create_class(
     db: AsyncSession = Depends(get_db),
 ):
     """Create a new class for the current admin (teacher)."""
-    user_id = _require_current_user_id(request)
+    user_id = uuid.UUID(await get_current_user_id(request))
+    await require_registered_user(db, user_id)
     role = await get_user_role(db, user_id)
 
     if role != "admin":
@@ -176,15 +165,9 @@ async def join_class(
     db: AsyncSession = Depends(get_db),
 ):
     """Join an existing class by 6-digit code."""
-    user_id = _require_current_user_id(request)
+    user_id = uuid.UUID(await get_current_user_id(request))
 
-    # Ensure the Supabase user exists (avoids FK issues if sync is delayed)
-    role = await get_user_role(db, user_id)
-    if role is None:
-        raise HTTPException(
-            status_code=400,
-            detail="User is not registered in public.users yet. Try signing out and back in.",
-        )
+    await require_registered_user(db, user_id)
 
     # Look up class by join code
     result = await db.execute(select(Class).where(Class.join_code == payload.join_code.strip()))
@@ -224,7 +207,7 @@ async def list_my_classes(
     db: AsyncSession = Depends(get_db),
 ):
     """List classes the current user teaches and classes they are enrolled in."""
-    user_id = _require_current_user_id(request)
+    user_id = uuid.UUID(await get_current_user_id(request))
 
     # Determine current user's role (if available)
     role = await get_user_role(db, user_id)
@@ -270,7 +253,7 @@ async def list_class_members(
     db: AsyncSession = Depends(get_db),
 ):
     """List students in a class. Any teacher of the class may call this."""
-    user_id = _require_current_user_id(request)
+    user_id = uuid.UUID(await get_current_user_id(request))
     class_uuid = _parse_uuid(class_id, "class id")
     await _ensure_class_teacher(db, class_uuid, user_id)
 
@@ -306,7 +289,7 @@ async def remove_class_member(
     db: AsyncSession = Depends(get_db),
 ):
     """Remove a student from a class. Any teacher of the class may call this."""
-    user_id = _require_current_user_id(request)
+    user_id = uuid.UUID(await get_current_user_id(request))
     class_uuid = _parse_uuid(class_id, "class id")
     member_uuid = _parse_uuid(member_user_id, "user id")
     await _ensure_class_teacher(db, class_uuid, user_id)
@@ -338,7 +321,7 @@ async def rotate_join_code(
 ):
     """Replace the class join code with a new unique code. Any teacher may call this;
     existing members stay enrolled."""
-    user_id = _require_current_user_id(request)
+    user_id = uuid.UUID(await get_current_user_id(request))
     class_uuid = _parse_uuid(class_id, "class id")
     class_obj = await _ensure_class_teacher(db, class_uuid, user_id)
 
@@ -357,7 +340,7 @@ async def list_class_admins(
     db: AsyncSession = Depends(get_db),
 ):
     """List the admins (teachers) of a class. Any teacher of the class may view."""
-    user_id = _require_current_user_id(request)
+    user_id = uuid.UUID(await get_current_user_id(request))
     class_uuid = _parse_uuid(class_id, "class id")
     await _ensure_class_teacher(db, class_uuid, user_id)
 
@@ -410,10 +393,11 @@ async def promote_class_member(
     db: AsyncSession = Depends(get_db),
 ):
     """Promote an enrolled class member to class admin. Creator only."""
-    user_id = _require_current_user_id(request)
+    user_id = uuid.UUID(await get_current_user_id(request))
     class_uuid = _parse_uuid(class_id, "class id")
     target_uuid = _parse_uuid(member_user_id, "user id")
     await _ensure_class_creator(db, class_uuid, user_id)
+    await require_registered_user(db, target_uuid)
 
     if target_uuid == user_id:
         raise HTTPException(status_code=400, detail="The class creator is already an admin")
@@ -475,10 +459,11 @@ async def revoke_class_admin(
     db: AsyncSession = Depends(get_db),
 ):
     """Revoke a class admin, returning them to regular member status. Creator only."""
-    user_id = _require_current_user_id(request)
+    user_id = uuid.UUID(await get_current_user_id(request))
     class_uuid = _parse_uuid(class_id, "class id")
     target_uuid = _parse_uuid(admin_user_id, "user id")
     class_obj = await _ensure_class_creator(db, class_uuid, user_id)
+    await require_registered_user(db, target_uuid)
 
     if target_uuid == class_obj.owner_user_id:
         raise HTTPException(
@@ -520,7 +505,7 @@ async def delete_class(
     db: AsyncSession = Depends(get_db),
 ):
     """Delete a class. Creator only."""
-    user_id = _require_current_user_id(request)
+    user_id = uuid.UUID(await get_current_user_id(request))
     class_uuid = _parse_uuid(class_id, "class id")
     class_obj = await _ensure_class_creator(db, class_uuid, user_id)
 

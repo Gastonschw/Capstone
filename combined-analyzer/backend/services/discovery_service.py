@@ -33,7 +33,7 @@ CODE_CONFIG_AUTO_SELECT_MIN_RELEVANCE = 50
 # ============== File Type Detection ==============
 
 # Image extensions for ERD detection
-IMAGE_EXTENSIONS = {'.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.bmp'}
+IMAGE_EXTENSIONS = {'.png', '.jpg', '.jpeg', '.gif', '.webp'}
 
 # Text file extensions for user story detection
 TEXT_EXTENSIONS = {'.md', '.txt', '.rst', '.feature', '.story', '.adoc'}
@@ -220,7 +220,9 @@ def scan_repository_files(repo_path: str) -> Dict[str, List[Dict]]:
     - 'code_files': code files for integrity analysis
     - 'config_files': config files for integrity analysis
     """
-    repo = Path(repo_path)
+    repo = Path(repo_path).resolve(strict=True)
+    if not repo.is_dir():
+        raise NotADirectoryError("Repository source directory is unavailable")
 
     images = []
     text_files = []
@@ -233,7 +235,10 @@ def scan_repository_files(repo_path: str) -> Dict[str, List[Dict]]:
         'dist', 'build', 'target', '.git', '.idea', '.vscode'
     }
 
-    for root, dirs, files in os.walk(repo):
+    def raise_walk_error(error):
+        raise error
+
+    for root, dirs, files in os.walk(repo, onerror=raise_walk_error):
         # Filter out skip directories
         dirs[:] = [d for d in dirs if d not in skip_dirs and not d.startswith('.')]
 
@@ -248,11 +253,8 @@ def scan_repository_files(repo_path: str) -> Dict[str, List[Dict]]:
             # Read content for text-based files
             content = ""
             if suffix in TEXT_EXTENSIONS or suffix in CODE_EXTENSIONS or suffix in CONFIG_EXTENSIONS:
-                try:
-                    with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-                        content = f.read(5000).replace('\x00', '')  # Read first 5KB, strip null bytes
-                except Exception:
-                    continue
+                with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                    content = f.read(5000).replace('\x00', '')  # Preview only; analysis reads full sources.
 
             # Categorize file
             if suffix in IMAGE_EXTENSIONS:
@@ -298,18 +300,17 @@ async def discover_files_with_ai(
     Use AI to intelligently identify ERD images and user story files.
     Uses TAMU API (OpenAI-compatible) with the given api_key (or env fallback).
     """
-    client = get_client(api_key=api_key)
 
     # Prepare file list for AI analysis
     file_info = []
-    for img in images[:50]:  # Limit to 50 images
+    for img in images:
         file_info.append({"path": img['path'], "type": "image"})
 
-    for txt in text_files[:30]:  # Limit to 30 text files
+    for txt in text_files:
         file_info.append({
             "path": txt['path'],
             "type": "text",
-            "preview": txt.get('preview', '')[:200]
+            "preview": (txt.get('preview') or '')[:200]
         })
 
     # Use AI to identify relevant files
@@ -343,6 +344,7 @@ Only include files you're reasonably confident about (confidence > 50).
 Return ONLY the JSON object, no other text."""
 
     def _call_completion():
+        client = get_client(api_key=api_key)
         resp = client.chat.completions.create(
             model=TAMU_DEFAULT_MODEL,
             max_tokens=2048,
@@ -383,7 +385,26 @@ Return ONLY the JSON object, no other text."""
             response_text = response_text.split("```")[1].split("```")[0]
 
         ai_results = json.loads(response_text.strip())
-    except json.JSONDecodeError:
+        if not isinstance(ai_results, dict):
+            raise ValueError("Discovery response must be an object")
+        for key, scanned in (("erd_images", images), ("user_story_files", text_files)):
+            items = ai_results.get(key)
+            allowed = {item["path"] for item in scanned}
+            if not isinstance(items, list):
+                raise ValueError("Discovery candidates must be arrays")
+            seen = set()
+            for item in items:
+                if not isinstance(item, dict):
+                    raise ValueError("Discovery candidate must be an object")
+                path = item.get("path")
+                confidence = item.get("confidence")
+                if (
+                    not isinstance(path, str) or path not in allowed or path in seen
+                    or type(confidence) is not int or not 0 <= confidence <= 100
+                ):
+                    raise ValueError("Invalid discovery candidate")
+                seen.add(path)
+    except (json.JSONDecodeError, ValueError, TypeError):
         ai_results = {"erd_images": [], "user_story_files": []}
 
     # Build final candidates with AI and heuristic scores
@@ -410,7 +431,7 @@ Return ONLY the JSON object, no other text."""
         preview = ""
         for txt in text_files:
             if txt['path'] == item["path"]:
-                preview = txt.get('preview', '')[:500]
+                preview = (txt.get('preview') or '')[:500]
                 break
 
         story_candidates.append(FileCandidate(
@@ -427,7 +448,7 @@ Return ONLY the JSON object, no other text."""
                 path=txt['path'],
                 file_type=FileType.user_story.value,
                 confidence=txt['confidence'],
-                preview=txt.get('preview', '')[:500]
+                preview=(txt.get('preview') or '')[:500]
             ))
 
     # Sort by confidence
@@ -435,8 +456,8 @@ Return ONLY the JSON object, no other text."""
     story_candidates.sort(key=lambda x: x.confidence, reverse=True)
 
     return {
-        "erd_images": erd_candidates[:10],
-        "user_story_files": story_candidates[:15]
+        "erd_images": erd_candidates,
+        "user_story_files": story_candidates
     }
 
 
@@ -445,6 +466,8 @@ async def run_file_discovery(
     db: AsyncSession,
     repository_id: int,
     api_key: Optional[str] = None,
+    *,
+    replace_existing: bool = False,
 ) -> Dict[str, Any]:
     """
     Run the complete file discovery workflow and save results to database.
@@ -454,7 +477,7 @@ async def run_file_discovery(
     (or from env); same key as chat.
     """
     # Step 1: Scan for all files
-    files = scan_repository_files(repo_path)
+    files = await asyncio.to_thread(scan_repository_files, repo_path)
 
     # Step 2: Use AI + heuristics to identify ERD-related files
     discovered_erd = await discover_files_with_ai(
@@ -476,7 +499,7 @@ async def run_file_discovery(
 
     # Save ALL image files as erd_image, using AI score when available,
     # heuristic score otherwise. Auto-select only high-confidence ones.
-    for img in sorted(files['images'], key=lambda x: ai_erd_scores.get(x['path'], x['confidence']), reverse=True)[:50]:
+    for img in sorted(files['images'], key=lambda x: ai_erd_scores.get(x['path'], x['confidence']), reverse=True):
         score = ai_erd_scores.get(img['path'], img['confidence'])
         db_file = DiscoveredFile(
             repository_id=repository_id,
@@ -486,12 +509,11 @@ async def run_file_discovery(
             is_selected_erd=score >= ERD_AUTO_SELECT_MIN_CONFIDENCE,
             is_selected_integrity=False,
         )
-        db.add(db_file)
         saved_files.append(db_file)
 
     # Save ALL text files as user_story, using AI score when available,
     # heuristic score otherwise. Auto-select only high-confidence ones.
-    for txt in sorted(files['text_files'], key=lambda x: ai_story_scores.get(x['path'], x['confidence']), reverse=True)[:50]:
+    for txt in sorted(files['text_files'], key=lambda x: ai_story_scores.get(x['path'], x['confidence']), reverse=True):
         score = ai_story_scores.get(txt['path'], txt['confidence'])
         preview = ai_story_previews.get(txt['path'], txt.get('preview', '')[:500] if txt.get('preview') else None)
         db_file = DiscoveredFile(
@@ -503,15 +525,10 @@ async def run_file_discovery(
             is_selected_erd=score >= ERD_AUTO_SELECT_MIN_CONFIDENCE,
             is_selected_integrity=False,
         )
-        db.add(db_file)
         saved_files.append(db_file)
 
     # Save code files (shared pool for all code-based analysis tools)
-    for code_file in sorted(files['code_files'], key=lambda x: x['relevance'], reverse=True)[:100]:
-        # Skip if relevance is too low
-        if code_file['relevance'] < 10:
-            continue
-
+    for code_file in sorted(files['code_files'], key=lambda x: x['relevance'], reverse=True):
         auto_code = code_file['relevance'] >= CODE_CONFIG_AUTO_SELECT_MIN_RELEVANCE
         db_file = DiscoveredFile(
             repository_id=repository_id,
@@ -527,14 +544,10 @@ async def run_file_discovery(
             is_selected_usability=auto_code,
             is_selected_maintainability=auto_code,
         )
-        db.add(db_file)
         saved_files.append(db_file)
 
     # Save config files (shared pool for all code-based analysis tools)
-    for config_file in sorted(files['config_files'], key=lambda x: x['relevance'], reverse=True)[:20]:
-        if config_file['relevance'] < 10:
-            continue
-
+    for config_file in sorted(files['config_files'], key=lambda x: x['relevance'], reverse=True):
         auto_cfg = config_file['relevance'] >= CODE_CONFIG_AUTO_SELECT_MIN_RELEVANCE
         db_file = DiscoveredFile(
             repository_id=repository_id,
@@ -549,10 +562,13 @@ async def run_file_discovery(
             is_selected_usability=auto_cfg,
             is_selected_maintainability=auto_cfg,
         )
-        db.add(db_file)
         saved_files.append(db_file)
 
-    await db.commit()
+    # Only mutate persisted selections once every replacement candidate exists.
+    if replace_existing:
+        await db.execute(delete(DiscoveredFile).where(DiscoveredFile.repository_id == repository_id))
+    db.add_all(saved_files)
+    await db.flush()
 
     return {
         "erd_images_found": len([f for f in saved_files if f.file_type == FileType.erd_image.value]),
@@ -563,16 +579,15 @@ async def run_file_discovery(
     }
 
 
-async def run_discovery_only(repository: Repository, db: AsyncSession) -> Dict[str, Any]:
-    """
-    Run only the file discovery step without full analysis.
-    Clears existing files and rediscovers.
-    """
-    # Clear existing discovered files
-    await db.execute(
-        delete(DiscoveredFile).where(DiscoveredFile.repository_id == repository.id)
-    )
-    await db.commit()
-
-    # Run discovery
-    return await run_file_discovery(repository.local_path, db, repository.id)
+async def run_discovery_only(repository: Repository, db: AsyncSession, api_key: Optional[str] = None) -> Dict[str, Any]:
+    """Replace discoveries atomically; any failure retains prior selections."""
+    try:
+        result = await run_file_discovery(
+            repository.local_path, db, repository.id,
+            api_key=api_key, replace_existing=True,
+        )
+        await db.commit()
+        return result
+    except BaseException:
+        await db.rollback()
+        raise

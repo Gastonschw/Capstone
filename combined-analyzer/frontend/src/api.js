@@ -1,67 +1,108 @@
 import axios from 'axios';
+import { supabase } from './lib/supabaseClient';
 
-const USER_ID_STORAGE_KEY = 'supabase_user_id';
 const SESSION_ID_STORAGE_KEY = 'github_session_id';
+let currentUserId = null;
+let identityInitialized = false;
+let userRequests = new AbortController();
 
-/** Call this when the user logs in with Supabase (e.g. Google). Pass null to clear. */
-export function setCurrentUserId(userId) {
-  if (userId == null || userId === '') {
-    localStorage.removeItem(USER_ID_STORAGE_KEY);
-  } else {
-    localStorage.setItem(USER_ID_STORAGE_KEY, String(userId));
-  }
-}
-
-/** Current Supabase user id, if set. Used to link GitHub and repos to the user. */
 export function getCurrentUserId() {
-  return localStorage.getItem(USER_ID_STORAGE_KEY) || null;
+  return currentUserId;
 }
 
-/** Store session_id received from the OAuth callback redirect.
- *  Needed for cross-origin deployments where third-party cookies are blocked. */
+function clearCredentials() {
+  localStorage.removeItem(SESSION_ID_STORAGE_KEY);
+  localStorage.removeItem('github_session_owner');
+  localStorage.removeItem('supabase_user_id');
+  localStorage.removeItem('tamu_chat_api_key');
+  localStorage.removeItem('credential_owner');
+}
+
+supabase?.auth.onAuthStateChange((_event, session) => {
+  const nextId = session?.user?.id ?? null;
+  if (nextId !== currentUserId || !identityInitialized) {
+    if (identityInitialized) {
+      userRequests.abort();
+      userRequests = new AbortController();
+    }
+    if (localStorage.getItem('credential_owner') !== nextId) clearCredentials();
+    if (nextId) localStorage.setItem('credential_owner', nextId);
+    currentUserId = nextId;
+    identityInitialized = true;
+  }
+});
+
 export function setSessionId(sessionId) {
-  if (sessionId == null || sessionId === '') {
+  if (!sessionId || !currentUserId) {
     localStorage.removeItem(SESSION_ID_STORAGE_KEY);
+    localStorage.removeItem('github_session_owner');
   } else {
-    localStorage.setItem(SESSION_ID_STORAGE_KEY, String(sessionId));
+    localStorage.setItem(SESSION_ID_STORAGE_KEY, sessionId);
+    localStorage.setItem('github_session_owner', currentUserId);
   }
 }
 
-export function getSessionId() {
-  return localStorage.getItem(SESSION_ID_STORAGE_KEY) || null;
+function getSessionId() {
+  return currentUserId && localStorage.getItem('github_session_owner') === currentUserId
+    ? localStorage.getItem(SESSION_ID_STORAGE_KEY) : null;
+}
+
+async function accessToken() {
+  if (!supabase) throw new Error('Supabase authentication is not configured.');
+  const { data: { session }, error } = await supabase.auth.getSession();
+  if (error || !session?.access_token) throw new Error('Please sign in to continue.');
+  return session.access_token;
+}
+
+export async function signOut() {
+  try {
+    await logoutGitHub();
+  } finally {
+    clearCredentials();
+    userRequests.abort();
+    userRequests = new AbortController();
+    try {
+      const result = await supabase?.auth.signOut();
+      if (result?.error) throw result.error;
+    } finally {
+      clearCredentials();
+      window.dispatchEvent(new Event('combined-analyzer-credentials-cleared'));
+    }
+  }
 }
 
 const API_BASE = import.meta.env.VITE_API_URL || '/api';
+const api = axios.create({ baseURL: API_BASE, withCredentials: true });
 
-const api = axios.create({
-  baseURL: API_BASE,
-  withCredentials: true,
-});
-
-api.interceptors.request.use((config) => {
-  const userId = getCurrentUserId();
-  if (userId) {
-    config.headers['X-User-Id'] = userId;
-  }
+api.interceptors.request.use(async (config) => {
+  const signal = userRequests.signal;
+  config.headers.Authorization = `Bearer ${await accessToken()}`;
+  config.signal = signal;
   const sessionId = getSessionId();
-  if (sessionId) {
-    config.headers['X-Session-Id'] = sessionId;
-  }
+  if (sessionId && !config.headers['X-Session-Id']) config.headers['X-Session-Id'] = sessionId;
   return config;
 });
 
 // ============== Repository Management ==============
 
 export async function listRepositories(opts = {}) {
-  const config = {};
+  const signal = userRequests.signal;
+  const params = {};
   if (opts.classId && opts.studentUserId) {
-    config.params = {
-      class_id: opts.classId,
-      student_user_id: opts.studentUserId,
-    };
+    params.class_id = opts.classId;
+    params.student_user_id = opts.studentUserId;
   }
-  const response = await api.get('/repositories', config);
-  return response.data;
+  const explicitPage = opts.limit !== undefined || opts.offset !== undefined;
+  const limit = opts.limit ?? 50;
+  let offset = opts.offset ?? 0;
+  const repositories = [];
+  do {
+    const response = await api.get('/repositories', { params: { ...params, limit, offset } });
+    if (signal.aborted) throw new axios.CanceledError('Account changed');
+    repositories.push(...response.data);
+    if (explicitPage || response.data.length < limit) return repositories;
+    offset += limit;
+  } while (true);
 }
 
 export async function getRepository(repositoryId) {
@@ -83,8 +124,10 @@ export async function updateFileSelection(repositoryId, fileIds, isSelected, ana
   return response.data;
 }
 
-export async function rediscoverFiles(repositoryId) {
-  const response = await api.post(`/repository/${repositoryId}/rediscover`);
+export async function rediscoverFiles(repositoryId, apiKey = '') {
+  const response = await api.post(`/repository/${repositoryId}/rediscover`, null, {
+    headers: apiKey ? { 'X-TAMU-API-Key': apiKey } : {},
+  });
   return response.data;
 }
 
@@ -109,20 +152,15 @@ export async function uploadFolder(zipFile, name = null, apiKey = '') {
 
 // ============== GitHub OAuth ==============
 
-export function initiateGitHubAuth() {
-  const userId = getCurrentUserId();
-  const params = new URLSearchParams();
-  if (userId) params.set('user_id', userId);
-  // Pass existing session_id so the backend can reuse it (cookie may not
-  // survive cross-origin redirect in browsers that block third-party cookies).
-  const sid = getSessionId();
-  if (sid) params.set('session_id', sid);
-  const qs = params.toString();
-  window.location.href = `${API_BASE}/github/auth${qs ? '?' + qs : ''}`;
+export async function initiateGitHubAuth() {
+  const response = await api.post('/github/auth');
+  window.location.assign(response.data.authorization_url);
 }
 
-export async function getGitHubAuthStatus() {
-  const response = await api.get('/github/status');
+export async function getGitHubAuthStatus(sessionId = null) {
+  const response = await api.get('/github/status', {
+    headers: sessionId ? { 'X-Session-Id': sessionId } : {},
+  });
   return response.data;
 }
 
@@ -332,34 +370,42 @@ const analysisGetters = {
   maintainability: getMaintainabilityAnalysis,
 };
 
-export async function pollAnalysis(type, analysisId, onUpdate, intervalMs = 5000) {
-  const getAnalysis = analysisGetters[type] || getIntegrityAnalysis;
-
+export function pollAnalysis(type, analysisId, onUpdate, intervalMs = 5000, onError = () => {}) {
+  const getAnalysis = analysisGetters[type];
+  if (!getAnalysis) throw new Error(`Unsupported analysis type: ${type}`);
+  let cancelled = false;
+  let timer;
   let errorCount = 0;
-  const maxErrors = 5;
-
+  const signal = userRequests.signal;
+  const cancel = () => {
+    cancelled = true;
+    clearTimeout(timer);
+    signal.removeEventListener('abort', cancel);
+  };
+  signal.addEventListener('abort', cancel, { once: true });
   const poll = async () => {
     try {
       const analysis = await getAnalysis(analysisId);
+      if (cancelled) return;
       errorCount = 0;
       onUpdate(analysis);
-
       if (analysis.status === 'pending' || analysis.status === 'processing') {
-        setTimeout(poll, intervalMs);
+        timer = setTimeout(poll, intervalMs);
+      } else {
+        cancel();
+        if (analysis.status === 'failed') onError(new Error(analysis.error_message || analysis.error || 'Analysis failed'));
       }
     } catch (err) {
-      errorCount++;
-      console.error(`Poll error for ${type}/${analysisId} (${errorCount}/${maxErrors}):`, err);
-      if (errorCount < maxErrors) {
-        setTimeout(poll, intervalMs * 2);
-      } else {
-        console.error(`Giving up polling ${type}/${analysisId} after ${maxErrors} errors`);
-        onUpdate({ status: 'failed', error: 'Polling failed' });
+      if (cancelled) return;
+      if (++errorCount < 5) timer = setTimeout(poll, intervalMs * 2);
+      else {
+        cancel();
+        onError(err);
       }
     }
   };
-
   poll();
+  return cancel;
 }
 
 // ============== Chat ==============
@@ -433,20 +479,28 @@ export async function sendChatMessage(
   apiKey,
   onChunk,
   onDone,
-  onError
+  onError,
+  requestSignal
 ) {
   const url = `${API_BASE}/chat/${analysisType}/${analysisId}`;
   const headers = {
     'Content-Type': 'application/json',
   };
 
-  const userId = getCurrentUserId();
-  if (userId) headers['X-User-Id'] = userId;
+  const identitySignal = userRequests.signal;
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  identitySignal.addEventListener('abort', abort, { once: true });
+  requestSignal?.addEventListener('abort', abort, { once: true });
+  if (identitySignal.aborted || requestSignal?.aborted) abort();
+  const signal = controller.signal;
+  let reader;
   const sessionId = getSessionId();
   if (sessionId) headers['X-Session-Id'] = sessionId;
   if (apiKey) headers['X-TAMU-API-Key'] = apiKey;
 
   try {
+    headers.Authorization = `Bearer ${await accessToken()}`;
     const decodeSseDataChunk = (data) => {
       try {
         return JSON.parse(data);
@@ -467,6 +521,7 @@ export async function sendChatMessage(
       headers,
       body: JSON.stringify(body),
       credentials: 'include',
+      signal,
     });
 
     if (!response.ok) {
@@ -475,13 +530,12 @@ export async function sendChatMessage(
         const data = await response.json();
         if (data?.detail) detail = typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail);
       } catch {
-        const text = await response.text();
-        if (text) detail = text;
+        // The body may already have been consumed by response.json().
       }
       throw new Error(detail);
     }
 
-    const reader = response.body.getReader();
+    reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
 
@@ -507,14 +561,24 @@ export async function sendChatMessage(
             return;
           }
 
-          onChunk(decodeSseDataChunk(data));
+          const chunk = decodeSseDataChunk(data);
+          if (chunk && typeof chunk === 'object' && chunk.error) {
+            throw new Error(typeof chunk.error === 'string' ? chunk.error : JSON.stringify(chunk.error));
+          }
+          onChunk(chunk);
         }
       }
     }
 
-    onDone();
+    throw new Error('The response stream ended before completion. Please retry.');
   } catch (err) {
-    console.error('Chat error:', err);
-    onError(err);
+    if (!signal.aborted) onError(err);
+  } finally {
+    identitySignal.removeEventListener('abort', abort);
+    requestSignal?.removeEventListener('abort', abort);
+    if (reader) {
+      await reader.cancel().catch(() => {});
+      reader.releaseLock();
+    }
   }
 }

@@ -1,100 +1,78 @@
-"""
-Configuration module for the Combined Analyzer backend.
-"""
+"""Validated configuration for the PostgreSQL/Supabase application."""
 
 import os
-import socket
 from pathlib import Path
-from urllib.parse import quote_plus
-from dotenv import load_dotenv
+from urllib.parse import urlsplit
+
 from cryptography.fernet import Fernet
+from dotenv import load_dotenv
+from sqlalchemy.engine import URL, make_url
 
-_env_path = Path(__file__).resolve().parent / ".env"
-load_dotenv(_env_path)
+load_dotenv(Path(__file__).resolve().parent / ".env")
 
 
-_raw_url = (os.getenv("DATABASE_URL") or "").strip()
-_db_user = (os.getenv("DB_USER") or "").strip()
-_db_password = (os.getenv("DB_PASSWORD") or "").strip()
-_db_host = (os.getenv("DB_HOST") or "").strip()
-_db_port = (os.getenv("DB_PORT") or "").strip()
-_db_name = (os.getenv("DB_NAME") or "").strip()
+def _required(name: str) -> str:
+    value = (os.getenv(name) or "").strip()
+    if not value:
+        raise RuntimeError(f"{name} is required; see combined-analyzer/README.md")
+    return value
 
-def _postgres_url_to_async(url: str) -> str:
-    url = url.replace("postgres://", "postgresql://", 1)
-    if url.startswith("postgresql+psycopg2://"):
-        url = "postgresql+asyncpg://" + url[len("postgresql+psycopg2://"):]
-    elif url.startswith("postgresql://"):
-        url = "postgresql+asyncpg://" + url[len("postgresql://"):]
-    if "ssl" not in url and ("supabase.co" in url or "pooler.supabase.com" in url):
-        url += "&ssl=require" if "?" in url else "?ssl=require"
-    return url
 
-def _host_resolves(url: str) -> bool:
-    """True if the URL's host can be resolved (DNS)."""
-    try:
-        # netloc is user:pass@host:port; host is after last @, before last :
-        netloc = url.split("://", 1)[-1].split("/")[0]
-        host_port = netloc.rpartition("@")[-1]
-        host = host_port.rsplit(":", 1)[0].strip("[]")
-        port = int(host_port.rsplit(":", 1)[-1]) if ":" in host_port else 5432
-        socket.getaddrinfo(host, port)
-        return True
-    except Exception:
-        return False
-
-_use_postgres = False
-if _raw_url and (_raw_url.startswith("postgresql://") or _raw_url.startswith("postgres://")):
-    if _host_resolves(_raw_url):
-        DATABASE_URL = _postgres_url_to_async(_raw_url)
-        _use_postgres = True
+def _database_url() -> str:
+    raw = (os.getenv("DATABASE_URL") or "").strip()
+    if raw:
+        url = make_url(raw.replace("postgres://", "postgresql://", 1))
     else:
-        import warnings
-        warnings.warn(
-            "Supabase/Postgres host in DATABASE_URL could not be resolved (DNS). "
-            "Using SQLite. To use Supabase: try the Session pooler (IPv4) from "
-            "Dashboard → Connect → Connection string → Session mode."
+        url = URL.create(
+            "postgresql",
+            username=_required("DB_USER"),
+            password=_required("DB_PASSWORD"),
+            host=_required("DB_HOST"),
+            port=int(_required("DB_PORT")),
+            database=_required("DB_NAME"),
         )
-        DATABASE_URL = "sqlite+aiosqlite:///./combined_analyzer.db"
-elif all((_db_user, _db_password, _db_host, _db_port, _db_name)):
-    try:
-        socket.getaddrinfo(_db_host, int(_db_port))
-        _use_postgres = True
-        _user = quote_plus(_db_user)
-        _password = quote_plus(_db_password)
-        DATABASE_URL = f"postgresql+asyncpg://{_user}:{_password}@{_db_host}:{_db_port}/{_db_name}?ssl=require"
-    except (socket.gaierror, ValueError, OSError):
-        import warnings
-        warnings.warn(
-            f"Cannot resolve DB_HOST '{_db_host}'. Using SQLite. "
-            "For Supabase use Session pooler (IPv4) from Dashboard → Connect."
-        )
-        DATABASE_URL = "sqlite+aiosqlite:///./combined_analyzer.db"
-else:
-    DATABASE_URL = _raw_url or "sqlite+aiosqlite:///./combined_analyzer.db"
+    if url.get_backend_name() != "postgresql":
+        raise RuntimeError("DATABASE_URL must use PostgreSQL; SQLite is not supported")
+    url = url.set(drivername="postgresql+asyncpg")
+    query = dict(url.query)
+    if "sslmode" in query:
+        query["ssl"] = query.pop("sslmode")
+    if "ssl" not in query and url.host and (
+        url.host.endswith(".supabase.co") or url.host.endswith(".supabase.com")
+    ):
+        query["ssl"] = "require"
+    return url.set(query=query).render_as_string(hide_password=False)
 
-# For startup log and /api/health: "postgres" when using Supabase, "sqlite" otherwise
-DATABASE_KIND = "postgres" if _use_postgres else "sqlite"
 
-# Frontend URL (for OAuth callback redirects)
-FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:5173")
+DATABASE_URL = _database_url()
+DATABASE_KIND = "postgres"
+SUPABASE_URL = _required("SUPABASE_URL").rstrip("/")
+SUPABASE_ANON_KEY = _required("SUPABASE_ANON_KEY")
+_auth_url = urlsplit(SUPABASE_URL)
+if _auth_url.scheme != "https" and not (
+    _auth_url.scheme == "http" and _auth_url.hostname in {"localhost", "127.0.0.1", "::1"}
+):
+    raise RuntimeError("SUPABASE_URL must use HTTPS (HTTP is allowed only on localhost)")
 
-# GitHub OAuth
+FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:5173").rstrip("/")
 GITHUB_CLIENT_ID = os.getenv("GITHUB_CLIENT_ID", "")
 GITHUB_CLIENT_SECRET = os.getenv("GITHUB_CLIENT_SECRET", "")
-GITHUB_REDIRECT_URI = os.getenv("GITHUB_REDIRECT_URI", "http://localhost:8000/api/github/callback")
+GITHUB_REDIRECT_URI = os.getenv(
+    "GITHUB_REDIRECT_URI", "http://localhost:8000/api/github/callback"
+)
 
-# Encryption key for tokens (generate with Fernet.generate_key() and store in env)
-ENCRYPTION_KEY = os.getenv("GITHUB_TOKEN_ENCRYPTION_KEY", Fernet.generate_key().decode())
+# The same key must be supplied to every restart. Never generate an ephemeral key.
+ENCRYPTION_KEY = _required("GITHUB_TOKEN_ENCRYPTION_KEY")
+try:
+    Fernet(ENCRYPTION_KEY.encode("ascii"))
+except (ValueError, UnicodeEncodeError) as exc:
+    raise RuntimeError("GITHUB_TOKEN_ENCRYPTION_KEY must be a valid Fernet key") from exc
 
-# Repository storage
-REPOS_DIR = Path("uploads/repos")
+# Render mounts this path on a persistent disk; local development uses uploads/repos.
+REPOS_DIR = Path(os.getenv("REPOS_DIR", "uploads/repos")).resolve()
 REPOS_DIR.mkdir(parents=True, exist_ok=True)
-
-# Upload limits
-MAX_UPLOAD_SIZE = 100 * 1024 * 1024  # 100MB
-
-# Allowed archive types
+MAX_UPLOAD_SIZE = 100 * 1024 * 1024
+MAX_ANALYSIS_SOURCE_BYTES = 200_000
 ALLOWED_ARCHIVE_TYPES = [
     "application/zip",
     "application/x-zip-compressed",

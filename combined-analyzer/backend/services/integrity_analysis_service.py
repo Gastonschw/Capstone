@@ -11,6 +11,7 @@ Uses TAMU API (OpenAI-compatible) so the same API key as chat works.
 
 import asyncio
 import json
+import math
 import logging
 from pathlib import Path
 from typing import List, Dict, Any, Optional
@@ -19,41 +20,53 @@ from dataclasses import dataclass
 logger = logging.getLogger(__name__)
 
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
 
-from models.repository import Repository, DiscoveredFile, FileType
+from models.repository import Repository, FileType
+from config import MAX_ANALYSIS_SOURCE_BYTES
 from services.chat_service import get_client, TAMU_DEFAULT_MODEL
 
 
 def _extract_content_from_sse(sse_text: str) -> str:
-    """If the response is SSE (multiple 'data: {...}' lines), concatenate all delta.content."""
-    if not sse_text or not sse_text.strip():
-        return ""
+    """Decode a complete provider stream without silently discarding errors."""
     out = []
-    for line in sse_text.split("\n"):
+    stopped = False
+    for line in sse_text.splitlines():
         line = line.strip()
-        if not line.startswith("data:"):
+        if not line or line.startswith(":"):
             continue
+        if not line.startswith("data:"):
+            raise ValueError("Malformed analysis stream")
         payload = line[5:].strip()
-        if payload == "[DONE]" or not payload:
+        if payload == "[DONE]":
             continue
         try:
             obj = json.loads(payload)
-        except json.JSONDecodeError:
+        except ValueError as exc:
+            raise ValueError("Malformed analysis stream JSON") from exc
+        if not isinstance(obj, dict) or obj.get("error"):
+            raise ValueError("Analysis provider stream failed")
+        choices = obj.get("choices")
+        if choices == [] and obj.get("usage"):
             continue
-        choices = obj.get("choices") if isinstance(obj, dict) else None
-        if not choices or not isinstance(choices, list):
-            continue
-        first = choices[0] if choices else None
-        if not isinstance(first, dict):
-            continue
+        if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
+            raise ValueError("Analysis stream requires a choice")
+        first = choices[0]
+        reason = first.get("finish_reason")
+        if reason is not None:
+            if reason != "stop":
+                raise ValueError("Analysis provider did not finish its response")
+            stopped = True
         delta = first.get("delta") or first.get("message") or {}
-        if not isinstance(delta, dict):
-            continue
+        if not isinstance(delta, dict) or delta.get("refusal"):
+            raise ValueError("Invalid analysis stream content")
         part = delta.get("content")
-        if isinstance(part, str):
+        if part is not None:
+            if not isinstance(part, str):
+                raise ValueError("Invalid analysis stream text")
             out.append(part)
-    return "".join(out) if out else ""
+    if not stopped or not out:
+        raise ValueError("Incomplete or empty analysis stream")
+    return "".join(out)
 
 
 def _tamu_completion(
@@ -74,35 +87,22 @@ def _tamu_completion(
         stream=False,
     )
     content = ""
-    try:
-        if isinstance(resp, str):
-            content = resp
-        elif getattr(resp, "choices", None) and resp.choices:
-            msg = getattr(resp.choices[0], "message", None)
-            if msg and getattr(msg, "content", None):
-                content = msg.content or ""
-            else:
-                delta = getattr(resp.choices[0], "delta", None)
-                if delta and getattr(delta, "content", None):
-                    content = delta.content or ""
-        if not content and isinstance(resp, str):
-            content = resp
-    except Exception as e:
-        logger.exception("TAMU API response handling: %s", e)
+    if isinstance(resp, str):
+        content = resp
+    elif getattr(resp, "choices", None):
+        choice = resp.choices[0]
+        if getattr(choice, "finish_reason", None) != "stop":
+            raise ValueError("Analysis provider did not finish its response")
+        message = getattr(choice, "message", None)
+        if message is not None and not getattr(message, "refusal", None):
+            content = getattr(message, "content", "")
 
     # If we got raw SSE (e.g. "data: {...}\n..."), extract and concatenate chunk contents
     if isinstance(content, str) and (content.strip().startswith("data:") or "\ndata:" in content):
         content = _extract_content_from_sse(content)
-    if content:
-        logger.info(
-            "TAMU API response (content, first 1500 chars): %s",
-            (content[:1500] + "..." if len(content) > 1500 else content),
-        )
+    if isinstance(content, str) and content.strip():
         return content
-    logger.warning(
-        "TAMU API returned empty or unexpected content. Check API key, TAMU_API_BASE, and TAMU_MODEL. See https://docs.tamus.ai/docs/prod/advanced/api/api-docs"
-    )
-    return ""
+    raise ValueError("Analysis provider returned empty content")
 
 
 @dataclass
@@ -129,137 +129,130 @@ class IntegrityAnalysisResult:
     summary: Dict
 
 
-def read_file_content(repo_path: str, file_path: str) -> str:
-    """Read the full content of a file."""
-    full_path = Path(repo_path) / file_path
-    try:
-        with open(full_path, 'r', encoding='utf-8', errors='ignore') as f:
-            return f.read()
-    except Exception as e:
-        return f"Error reading file: {e}"
 
 
 def parse_json_response(response_text: str) -> Dict:
-    """Parse JSON from model response, handling markdown code blocks and surrounding text.
-    Also unwraps TAMU/OpenAI-style responses that may nest JSON in 'content' or 'message'.
-    """
-    if not response_text or not isinstance(response_text, str):
-        return {}
+    """Decode one JSON object, optionally enclosed in a Markdown fence."""
+    if not isinstance(response_text, str) or not response_text.strip():
+        raise ValueError("Analysis provider returned empty content")
     text = response_text.strip()
+    if text.startswith("```"):
+        lines = text.splitlines()
+        if lines[0].strip() not in ("```", "```json") or lines[-1].strip() != "```":
+            raise ValueError("Invalid fenced analysis response")
+        text = "\n".join(lines[1:-1])
+    try:
+        result = json.loads(text)
+    except (ValueError, TypeError) as exc:
+        raise ValueError("Analysis provider returned invalid JSON") from exc
+    if not isinstance(result, dict) or not result:
+        raise ValueError("Analysis response must be a nonempty JSON object")
+    return result
 
-    # Try to extract JSON from markdown code block
-    if "```json" in text:
-        start = text.find("```json") + 7
-        end = text.find("```", start)
-        if end > start:
-            text = text[start:end].strip()
-    elif "```" in text:
-        start = text.find("```") + 3
-        end = text.find("```", start)
-        if end > start:
-            text = text[start:end].strip()
 
-    def try_parse(s: str) -> Dict:
+def _required_text(value: Any, field: str) -> None:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"Analysis response requires nonempty {field}")
+
+
+def _required_strings(value: Any, field: str) -> None:
+    if not isinstance(value, list):
+        raise ValueError(f"Analysis response requires a {field} list")
+    for item in value:
+        _required_text(item, field)
+
+
+def _required_score(value: Any, field: str) -> None:
+    if type(value) not in (int, float) or not 0 <= value <= 100 or not math.isfinite(value):
+        raise ValueError(f"Analysis {field} must be a finite number from 0 to 100")
+
+
+def validate_characteristic_response(result: Dict) -> Dict:
+    _required_score(result.get("score"), "score")
+    if result.get("status") not in ("fulfilled", "partially_fulfilled", "not_fulfilled", "not_applicable"):
+        raise ValueError("Invalid analysis status")
+    _required_text(result.get("description"), "description")
+    _required_strings(result.get("recommendations"), "recommendations")
+    findings = result.get("findings")
+    if not isinstance(findings, list):
+        raise ValueError("Analysis response requires a findings list")
+    for finding in findings:
+        if not isinstance(finding, dict):
+            raise ValueError("Analysis findings must be objects")
+        if finding.get("type") not in ("positive", "negative", "warning"):
+            raise ValueError("Invalid finding type")
+        _required_text(finding.get("file_path"), "finding file_path")
+        _required_text(finding.get("explanation"), "finding explanation")
+        if "line_number" not in finding or (finding["line_number"] is not None and
+                (type(finding["line_number"]) is not int or finding["line_number"] < 1)):
+            raise ValueError("Invalid finding line_number")
+        if not isinstance(finding.get("code_snippet"), str):
+            raise ValueError("Finding requires code_snippet")
+    return result
+
+
+def validate_summary_response(result: Dict) -> Dict:
+    _required_score(result.get("overall_score"), "overall_score")
+    if result.get("risk_level") not in ("low", "medium", "high", "critical"):
+        raise ValueError("Invalid analysis risk_level")
+    _required_text(result.get("executive_summary"), "executive_summary")
+    for field in ("strengths", "areas_for_improvement", "priority_recommendations"):
+        _required_strings(result.get(field), field)
+    return result
+
+
+class PreparedFiles(list):
+    """Already read and bounded sources shared by the characteristic agents."""
+
+
+def validate_selected_files(repo_path: str, selected_files: Optional[List[Dict]]) -> PreparedFiles:
+    """Preflight the entire snapshot before any provider request."""
+    if not isinstance(selected_files, list) or not selected_files:
+        raise ValueError("A nonempty selected-files snapshot is required")
+    root = Path(repo_path).resolve(strict=True)
+    total = 0
+    prepared = PreparedFiles()
+    for source in selected_files:
+        if not isinstance(source, dict):
+            raise ValueError("Invalid selected-files snapshot")
+        name = source.get("file_path")
+        file_type = source.get("file_type")
+        if not isinstance(name, str) or not name or not isinstance(file_type, str) or not file_type:
+            raise ValueError("Snapshot requires file_path and file_type")
+        relative = Path(name)
+        if relative.is_absolute() or ".." in relative.parts:
+            raise ValueError("Selected source must be a repository-relative path")
+        path = (root / relative).resolve(strict=True)
+        if not path.is_relative_to(root) or not path.is_file():
+            raise ValueError(f"Invalid selected source: {name}")
+        size = path.stat().st_size
+        if total + size > MAX_ANALYSIS_SOURCE_BYTES:
+            raise ValueError(f"Selected sources exceed {MAX_ANALYSIS_SOURCE_BYTES} bytes")
+        with path.open("rb") as stream:
+            data = stream.read(MAX_ANALYSIS_SOURCE_BYTES - total + 1)
+        total += len(data)
+        if total > MAX_ANALYSIS_SOURCE_BYTES:
+            raise ValueError(f"Selected sources exceed {MAX_ANALYSIS_SOURCE_BYTES} bytes")
         try:
-            return json.loads(s)
-        except json.JSONDecodeError:
-            return {}
-
-    obj = try_parse(text)
-    if not obj:
-        # Fallback: find first { and matching } to extract a JSON object from surrounding text
-        start_brace = text.find("{")
-        if start_brace >= 0:
-            depth = 0
-            for i in range(start_brace, len(text)):
-                if text[i] == "{":
-                    depth += 1
-                elif text[i] == "}":
-                    depth -= 1
-                    if depth == 0:
-                        obj = try_parse(text[start_brace : i + 1])
-                        break
-
-    # Unwrap nested JSON: some APIs return {"content": "{\"score\": ...}"} or similar
-    for key in ("content", "message", "result", "data", "body"):
-        if not obj or not isinstance(obj.get(key), str):
-            continue
-        inner = obj[key].strip()
-        if (inner.startswith("{") and "}" in inner) or (inner.startswith("[") and "]" in inner):
-            parsed = try_parse(inner)
-            if parsed and isinstance(parsed, dict):
-                # Prefer inner keys for our expected fields
-                for k, v in parsed.items():
-                    if k not in obj or obj[k] is None:
-                        obj[k] = v
-    return obj if isinstance(obj, dict) else {}
+            content = data.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise ValueError(f"Selected source is not UTF-8 text: {name}") from exc
+        prepared.append({"path": name, "content": content, "file_type": file_type})
+    if not any(source["content"].strip() for source in prepared):
+        raise ValueError("Selected sources contain no analysis content")
+    return prepared
 
 
-def _description_from_result(result: Dict, default: str) -> str:
-    """Get description from result, trying common keys used by TAMU/LLM responses."""
-    if not result:
-        return default
-    for key in ("description", "summary", "explanation", "assessment", "overview"):
-        val = result.get(key)
-        if isinstance(val, str) and val.strip():
-            return val.strip()
-    return default
+def prepare_file_contents(repo_path: str, files: List[Dict]) -> List[Dict]:
+    """Preserve every source in full; orchestrators reuse their preflight read."""
+    return files if isinstance(files, PreparedFiles) else validate_selected_files(repo_path, files)
 
 
-def _log_incomplete_response(characteristic: str, result: Dict, raw_preview: str) -> None:
-    """Log when a characteristic analysis returned incomplete or unparseable data."""
-    if not result or not result.get("description"):
-        logger.warning(
-            "Integrity analysis '%s' returned no description. Parsed keys: %s. Raw response (first 800 chars): %s",
-            characteristic,
-            list(result.keys()) if result else [],
-            raw_preview[:800] if raw_preview else "(empty)",
-        )
-
-
-def prepare_file_contents(repo_path: str, files: List[Dict], limit: int = 30) -> List[Dict]:
-    """Prepare file contents for analysis."""
-    file_contents = []
-    for f in files[:limit]:
-        content = read_file_content(repo_path, f['file_path'])
-        if len(content) > 5000:
-            content = content[:5000] + "\n... (truncated)"
-        file_contents.append({
-            'path': f['file_path'],
-            'content': content
-        })
-    return file_contents
-
-
-async def load_user_stories_for_repo(
-    repo_path: str, repository_id: int, db: AsyncSession
-) -> str:
-    """
-    Load user story content for a repository from discovered files.
-    Returns concatenated user stories text, or empty string if none found.
-    """
-    result = await db.execute(
-        select(DiscoveredFile).where(
-            DiscoveredFile.repository_id == repository_id,
-            DiscoveredFile.file_type == FileType.user_story.value,
-            DiscoveredFile.is_selected_erd == True,
-        )
+def snapshot_user_stories(files: List[Dict]) -> str:
+    return "\n\n---\n\n".join(
+        f"## From: {source['path']}\n\n{source['content']}"
+        for source in files if source["file_type"] == FileType.user_story.value
     )
-    story_files = result.scalars().all()
-    if not story_files:
-        return ""
-
-    all_stories = []
-    for sf in story_files:
-        full_path = Path(repo_path) / sf.file_path
-        try:
-            with open(full_path, 'r', encoding='utf-8', errors='ignore') as f:
-                content = f.read()
-            all_stories.append(f"## From: {sf.file_path}\n\n{content}")
-        except Exception:
-            pass
-
-    return "\n\n---\n\n".join(all_stories)
 
 
 def build_user_stories_prompt_section(user_stories: str) -> str:
@@ -326,18 +319,18 @@ Respond with a JSON object:
 }}"""
 
     response_text = await asyncio.to_thread(_tamu_completion, api_key, prompt, 4096, model)
-    result = parse_json_response(response_text)
-    default_desc = "No structured result from model (check API key and response format)." if not result else "Analysis incomplete"
-    description = _description_from_result(result, default_desc)
-    _log_incomplete_response("Confidentiality", result, response_text or "")
+    result = validate_characteristic_response(parse_json_response(response_text))
+    
+    description = result['description']
+    
 
     return CharacteristicReport(
         characteristic="Confidentiality",
-        score=result.get("score", 50),
-        status=result.get("status", "partially_fulfilled"),
+        score=result["score"],
+        status=result["status"],
         description=description,
-        findings=result.get("findings", []),
-        recommendations=result.get("recommendations", [])
+        findings=result["findings"],
+        recommendations=result["recommendations"]
     )
 
 
@@ -381,18 +374,18 @@ Respond with a JSON object:
 }}"""
 
     response_text = await asyncio.to_thread(_tamu_completion, api_key, prompt, 4096, model)
-    result = parse_json_response(response_text)
-    default_desc = "No structured result from model (check API key and response format)." if not result else "Analysis incomplete"
-    description = _description_from_result(result, default_desc)
-    _log_incomplete_response("Data Integrity", result, response_text or "")
+    result = validate_characteristic_response(parse_json_response(response_text))
+    
+    description = result['description']
+    
 
     return CharacteristicReport(
         characteristic="Data Integrity",
-        score=result.get('score', 50),
-        status=result.get('status', 'partially_fulfilled'),
+        score=result['score'],
+        status=result['status'],
         description=description,
-        findings=result.get("findings", []),
-        recommendations=result.get("recommendations", [])
+        findings=result["findings"],
+        recommendations=result["recommendations"]
     )
 
 
@@ -436,18 +429,18 @@ Respond with a JSON object:
 }}"""
 
     response_text = await asyncio.to_thread(_tamu_completion, api_key, prompt, 4096, model)
-    result = parse_json_response(response_text)
-    default_desc = "No structured result from model (check API key and response format)." if not result else "Analysis incomplete"
-    description = _description_from_result(result, default_desc)
-    _log_incomplete_response("Authenticity", result, response_text or "")
+    result = validate_characteristic_response(parse_json_response(response_text))
+    
+    description = result['description']
+    
 
     return CharacteristicReport(
         characteristic="Authenticity",
-        score=result.get("score", 50),
-        status=result.get("status", "partially_fulfilled"),
+        score=result["score"],
+        status=result["status"],
         description=description,
-        findings=result.get("findings", []),
-        recommendations=result.get("recommendations", [])
+        findings=result["findings"],
+        recommendations=result["recommendations"]
     )
 
 
@@ -491,18 +484,18 @@ Respond with a JSON object:
 }}"""
 
     response_text = await asyncio.to_thread(_tamu_completion, api_key, prompt, 4096, model)
-    result = parse_json_response(response_text)
-    default_desc = "No structured result from model (check API key and response format)." if not result else "Analysis incomplete"
-    description = _description_from_result(result, default_desc)
-    _log_incomplete_response("Non-Repudiation", result, response_text or "")
+    result = validate_characteristic_response(parse_json_response(response_text))
+    
+    description = result['description']
+    
 
     return CharacteristicReport(
         characteristic="Non-Repudiation",
-        score=result.get("score", 50),
-        status=result.get("status", "partially_fulfilled"),
+        score=result["score"],
+        status=result["status"],
         description=description,
-        findings=result.get("findings", []),
-        recommendations=result.get("recommendations", [])
+        findings=result["findings"],
+        recommendations=result["recommendations"]
     )
 
 
@@ -546,18 +539,18 @@ Respond with a JSON object:
 }}"""
 
     response_text = await asyncio.to_thread(_tamu_completion, api_key, prompt, 4096, model)
-    result = parse_json_response(response_text)
-    default_desc = "No structured result from model (check API key and response format)." if not result else "Analysis incomplete"
-    description = _description_from_result(result, default_desc)
-    _log_incomplete_response("Accountability", result, response_text or "")
+    result = validate_characteristic_response(parse_json_response(response_text))
+    
+    description = result['description']
+    
 
     return CharacteristicReport(
         characteristic="Accountability",
-        score=result.get("score", 50),
-        status=result.get("status", "partially_fulfilled"),
+        score=result["score"],
+        status=result["status"],
         description=description,
-        findings=result.get("findings", []),
-        recommendations=result.get("recommendations", [])
+        findings=result["findings"],
+        recommendations=result["recommendations"]
     )
 
 
@@ -602,18 +595,18 @@ Respond with a JSON object:
 }}"""
 
     response_text = await asyncio.to_thread(_tamu_completion, api_key, prompt, 4096, model)
-    result = parse_json_response(response_text)
-    default_desc = "No structured result from model (check API key and response format)." if not result else "Analysis incomplete"
-    description = _description_from_result(result, default_desc)
-    _log_incomplete_response("Resistance", result, response_text or "")
+    result = validate_characteristic_response(parse_json_response(response_text))
+    
+    description = result['description']
+    
 
     return CharacteristicReport(
         characteristic="Resistance",
-        score=result.get("score", 50),
-        status=result.get("status", "partially_fulfilled"),
+        score=result["score"],
+        status=result["status"],
         description=description,
-        findings=result.get("findings", []),
-        recommendations=result.get("recommendations", [])
+        findings=result["findings"],
+        recommendations=result["recommendations"]
     )
 
 
@@ -659,7 +652,7 @@ Respond with a JSON object:
 }}"""
 
     response_text = await asyncio.to_thread(_tamu_completion, api_key, prompt, 2048, model)
-    return parse_json_response(response_text)
+    return validate_summary_response(parse_json_response(response_text))
 
 
 async def run_integrity_analysis(
@@ -667,6 +660,7 @@ async def run_integrity_analysis(
     db: AsyncSession,
     api_key: Optional[str] = None,
     model: Optional[str] = None,
+    selected_files: Optional[List[Dict]] = None,
 ) -> IntegrityAnalysisResult:
     """
     Main orchestrator: Runs the complete integrity analysis workflow.
@@ -674,20 +668,7 @@ async def run_integrity_analysis(
     """
     repo_path = repository.local_path
 
-    # Get selected files for integrity analysis
-    result = await db.execute(
-        select(DiscoveredFile).where(
-            DiscoveredFile.repository_id == repository.id,
-            DiscoveredFile.is_selected_integrity == True
-        )
-    )
-    files = result.scalars().all()
-
-    if not files:
-        raise ValueError("No files selected for integrity analysis")
-
-    # Convert to list of dicts
-    file_list = [{'file_path': f.file_path, 'file_type': f.file_type} for f in files]
+    file_list = validate_selected_files(repo_path, selected_files)
 
     # Run all characteristic analyses (TAMU API)
     confidentiality = await analyze_confidentiality(repo_path, file_list, api_key, model)
@@ -708,6 +689,6 @@ async def run_integrity_analysis(
         non_repudiation=non_repudiation,
         accountability=accountability,
         resistance=resistance,
-        overall_score=summary.get('overall_score', 50),
+        overall_score=summary['overall_score'],
         summary=summary
     )

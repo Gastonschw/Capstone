@@ -232,29 +232,37 @@ const styles = {
 };
 
 export default function ChecklistSidebar({ userId = null, supabaseConfigured = false }) {
+  return <ChecklistPanel key={JSON.stringify([userId, supabaseConfigured])} userId={userId} supabaseConfigured={supabaseConfigured} />;
+}
+
+function ChecklistPanel({ userId, supabaseConfigured }) {
   const [open, setOpen] = useState(false);
   const [items, setItems] = useState(() => loadItemsFromCache(userId));
   const [draft, setDraft] = useState('');
   const formId = useId();
-  const allowRemoteSaveRef = useRef(!userId || !supabaseConfigured);
-  const itemsRef = useRef(items);
-  itemsRef.current = items;
+  const [loaded, setLoaded] = useState(!userId || !supabaseConfigured || !supabase);
+  const [loadError, setLoadError] = useState('');
+  const [loadAttempt, setLoadAttempt] = useState(0);
+  const [dirty, setDirty] = useState(false);
+  const activeRef = useRef(false);
 
   useEffect(() => {
-    setItems(loadItemsFromCache(userId));
-  }, [userId]);
+    activeRef.current = true;
+    return () => { activeRef.current = false; };
+  }, []);
 
   useEffect(() => {
-    saveItemsToCache(userId, items);
-  }, [userId, items]);
+    if (loaded) saveItemsToCache(userId, items);
+  }, [userId, items, loaded]);
 
   useEffect(() => {
     if (!supabaseConfigured || !supabase || !userId) {
-      allowRemoteSaveRef.current = true;
+      setLoaded(true);
       return;
     }
 
-    allowRemoteSaveRef.current = false;
+    setLoaded(false);
+    setLoadError('');
     let cancelled = false;
 
     (async () => {
@@ -266,19 +274,17 @@ export default function ChecklistSidebar({ userId = null, supabaseConfigured = f
           .maybeSingle();
 
         if (cancelled) return;
-        if (error) {
-          console.warn('Checklist fetch failed:', error.message);
-          return;
-        }
+        if (error) throw error;
 
         if (data && data.items !== undefined && data.items !== null) {
           const normalized = normalizeItems(data.items);
           setItems(normalized);
           saveItemsToCache(userId, normalized);
         }
-      } finally {
+        setLoaded(true);
+      } catch (error) {
         if (!cancelled) {
-          allowRemoteSaveRef.current = true;
+          setLoadError(error?.message || 'Unable to load your checklist.');
         }
       }
     })();
@@ -286,24 +292,24 @@ export default function ChecklistSidebar({ userId = null, supabaseConfigured = f
     return () => {
       cancelled = true;
     };
-  }, [userId, supabaseConfigured]);
+  }, [userId, supabaseConfigured, loadAttempt]);
 
   useEffect(() => {
-    if (!userId || !supabaseConfigured || !supabase) return;
+    if (!loaded || !dirty || !userId || !supabaseConfigured || !supabase) return;
 
     const handle = setTimeout(() => {
-      if (!allowRemoteSaveRef.current) return;
-      const payload = itemsRef.current;
+      if (!activeRef.current) return;
       supabase
         .from('user_checklists')
-        .upsert({ user_id: userId, items: payload }, { onConflict: 'user_id' })
+        .upsert({ user_id: userId, items }, { onConflict: 'user_id' })
         .then(({ error }) => {
           if (error) console.warn('Checklist save failed:', error.message);
-        });
+        })
+        .catch((error) => console.warn('Checklist save failed:', error.message));
     }, REMOTE_SAVE_DEBOUNCE_MS);
 
     return () => clearTimeout(handle);
-  }, [userId, supabaseConfigured, items]);
+  }, [userId, supabaseConfigured, items, loaded, dirty]);
 
   useEffect(() => {
     if (!open) return;
@@ -315,21 +321,27 @@ export default function ChecklistSidebar({ userId = null, supabaseConfigured = f
   }, [open]);
 
   const addItem = useCallback(() => {
+    if (!loaded || !activeRef.current) return;
     const text = draft.trim();
     if (!text) return;
+    setDirty(true);
     setItems((prev) => [...prev, { id: makeId(), text, done: false }]);
     setDraft('');
-  }, [draft]);
+  }, [draft, loaded]);
 
   const toggleDone = useCallback((id) => {
+    if (!loaded || !activeRef.current) return;
+    setDirty(true);
     setItems((prev) =>
       prev.map((item) => (item.id === id ? { ...item, done: !item.done } : item)),
     );
-  }, []);
+  }, [loaded]);
 
   const removeItem = useCallback((id) => {
+    if (!loaded || !activeRef.current) return;
+    setDirty(true);
     setItems((prev) => prev.filter((item) => item.id !== id));
-  }, []);
+  }, [loaded]);
 
   return (
     <div className="checklist-sidebar-root" style={styles.root}>
@@ -364,6 +376,12 @@ export default function ChecklistSidebar({ userId = null, supabaseConfigured = f
             Close
           </button>
         </div>
+        {!loaded && (
+          <p style={styles.empty} role="status">
+            {loadError || 'Loading checklist…'}
+            {loadError && <button type="button" onClick={() => setLoadAttempt((attempt) => attempt + 1)}>Retry</button>}
+          </p>
+        )}
         <form
           style={styles.form}
           onSubmit={(e) => {
@@ -373,6 +391,7 @@ export default function ChecklistSidebar({ userId = null, supabaseConfigured = f
         >
           <input
             type="text"
+            disabled={!loaded}
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             placeholder="Add a task…"
@@ -381,11 +400,11 @@ export default function ChecklistSidebar({ userId = null, supabaseConfigured = f
             maxLength={2000}
             aria-label="New checklist item"
           />
-          <button type="submit" style={styles.addBtn}>
+          <button type="submit" style={styles.addBtn} disabled={!loaded}>
             Add
           </button>
         </form>
-        {open && items.length === 0 ? (
+        {open && loaded && items.length === 0 ? (
           <p style={styles.empty}>No items yet. Add something above.</p>
         ) : (
           <ul style={styles.list}>
@@ -399,6 +418,7 @@ export default function ChecklistSidebar({ userId = null, supabaseConfigured = f
               >
                 <input
                   type="checkbox"
+                  disabled={!loaded}
                   id={`${formId}-${item.id}`}
                   checked={item.done}
                   onChange={() => toggleDone(item.id)}
@@ -415,6 +435,7 @@ export default function ChecklistSidebar({ userId = null, supabaseConfigured = f
                 </label>
                 <button
                   type="button"
+                  disabled={!loaded}
                   style={styles.removeBtn}
                   onClick={() => removeItem(item.id)}
                   aria-label={`Remove: ${item.text.slice(0, 80)}`}

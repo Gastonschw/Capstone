@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { supabase } from '../../lib/supabaseClient';
 import ModelInfoModal from './ModelInfoModal';
+import { signOut } from '../../api';
 
 const styles = {
   header: {
@@ -171,7 +172,13 @@ export default function Header({
 
   const handleSignOut = async () => {
     if (!supabase?.auth) return;
-    await supabase.auth.signOut();
+    try {
+      await signOut();
+    } catch (err) {
+      window.alert(err.message || 'Sign-out failed. Please try again.');
+    } finally {
+      onApiKeyChange?.('');
+    }
   };
 
   return (

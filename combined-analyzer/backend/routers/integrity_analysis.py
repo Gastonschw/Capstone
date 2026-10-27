@@ -4,7 +4,7 @@ Integrity Analysis API routes.
 
 import json
 from typing import List, Optional
-from datetime import datetime
+from datetime import datetime, timezone
 from dataclasses import asdict
 from fastapi import APIRouter, Body, Depends, Header, HTTPException, BackgroundTasks, Request
 from pydantic import BaseModel
@@ -18,6 +18,7 @@ from schemas.integrity_analysis import IntegrityAnalysisResponse, IntegrityAnaly
 from services.integrity_analysis_service import run_integrity_analysis
 from services.repository_access import require_analysis_access, require_repository_access
 from concurrency import analysis_semaphore
+from services.analysis_lifecycle import snapshot_selected_files, tracked_analysis, mark_analysis_failed
 
 router = APIRouter(prefix="/api/integrity", tags=["integrity-analysis"])
 
@@ -39,11 +40,13 @@ def characteristic_report_to_dict(report) -> dict:
     }
 
 
+@tracked_analysis(IntegrityAnalysis)
 async def run_analysis_task(
     analysis_id: int,
     repository_id: int,
     api_key: Optional[str] = None,
     model: Optional[str] = None,
+    selected_files: Optional[list[dict[str, str]]] = None,
 ):
     """Background task to run Integrity analysis. Uses TAMU API with api_key and optional model."""
     async with analysis_semaphore, AsyncSessionLocal() as db:
@@ -58,8 +61,10 @@ async def run_analysis_task(
         )
         repository = result.scalar_one_or_none()
 
-        if not analysis or not repository:
+        if not analysis:
             return
+        if not repository:
+            raise ValueError("Repository is no longer available.")
 
         try:
             # Update status to processing
@@ -67,7 +72,7 @@ async def run_analysis_task(
             await db.commit()
 
             # Run the analysis (TAMU API with user's key and optional model)
-            analysis_result = await run_integrity_analysis(repository, db, api_key=api_key, model=model)
+            analysis_result = await run_integrity_analysis(repository, db, api_key=api_key, model=model, selected_files=selected_files)
 
             # Store results
             analysis.status = "completed"
@@ -91,7 +96,7 @@ async def run_analysis_task(
             )
             analysis.overall_score = analysis_result.overall_score
             analysis.summary_report = json.dumps(analysis_result.summary)
-            analysis.completed_at = datetime.utcnow()
+            analysis.completed_at = datetime.now(timezone.utc)
 
             await db.commit()
 
@@ -105,10 +110,7 @@ async def run_analysis_task(
                 repository_id,
             )
 
-            analysis.status = "failed"
-            analysis.error_message = str(e) or "Internal Server Error"
-            analysis.completed_at = datetime.utcnow()
-            await db.commit()
+            await mark_analysis_failed(db, IntegrityAnalysis, analysis_id, e)
 
 
 def _get_tamu_api_key(body: Optional[StartIntegrityAnalysisRequest], header_key: Optional[str]) -> Optional[str]:
@@ -130,7 +132,8 @@ async def start_integrity_analysis(
     tamu_api_key: Optional[str] = Header(default=None, alias="X-TAMU-API-Key"),
 ):
     """Start an Integrity analysis for a repository. Uses TAMU API key from body or header."""
-    await require_repository_access(request, db, repository_id)
+    repository = await require_repository_access(request, db, repository_id, with_discovered_files=True)
+    selected_files = snapshot_selected_files(repository, "integrity")
 
     api_key = _get_tamu_api_key(body, tamu_api_key)
     model = (body.model and body.model.strip()) if body else None
@@ -146,6 +149,7 @@ async def start_integrity_analysis(
     # Create analysis record
     analysis = IntegrityAnalysis(
         repository_id=repository_id,
+        selected_files=selected_files,
         status="pending"
     )
     db.add(analysis)
@@ -159,6 +163,7 @@ async def start_integrity_analysis(
         repository_id,
         api_key,
         model,
+        selected_files=selected_files,
     )
 
     return {
@@ -188,6 +193,7 @@ async def list_integrity_analyses(
             id=a.id,
             repository_id=a.repository_id,
             status=a.status,
+            selected_files=a.selected_files,
             overall_score=a.overall_score,
             created_at=a.created_at,
             completed_at=a.completed_at
@@ -209,6 +215,7 @@ async def get_integrity_analysis(
         id=analysis.id,
         repository_id=analysis.repository_id,
         status=analysis.status,
+        selected_files=analysis.selected_files,
         error_message=analysis.error_message,
         confidentiality_report=json.loads(analysis.confidentiality_report) if analysis.confidentiality_report else None,
         data_integrity_report=json.loads(analysis.data_integrity_report) if analysis.data_integrity_report else None,

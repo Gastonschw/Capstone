@@ -4,7 +4,7 @@ Correctness Analysis API routes.
 
 import json
 from typing import List, Optional
-from datetime import datetime
+from datetime import datetime, timezone
 from fastapi import APIRouter, Body, Depends, Header, HTTPException, BackgroundTasks, Request
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -17,6 +17,7 @@ from schemas.correctness_analysis import CorrectnessAnalysisResponse, Correctnes
 from services.correctness_analysis_service import run_correctness_analysis
 from services.repository_access import require_analysis_access, require_repository_access
 from concurrency import analysis_semaphore
+from services.analysis_lifecycle import snapshot_selected_files, tracked_analysis, mark_analysis_failed
 
 router = APIRouter(prefix="/api/correctness", tags=["correctness-analysis"])
 
@@ -37,11 +38,13 @@ def characteristic_report_to_dict(report) -> dict:
     }
 
 
+@tracked_analysis(CorrectnessAnalysis)
 async def run_analysis_task(
     analysis_id: int,
     repository_id: int,
     api_key: Optional[str] = None,
     model: Optional[str] = None,
+    selected_files: Optional[list[dict[str, str]]] = None,
 ):
     """Background task to run Correctness analysis."""
     async with analysis_semaphore, AsyncSessionLocal() as db:
@@ -55,14 +58,16 @@ async def run_analysis_task(
         )
         repository = result.scalar_one_or_none()
 
-        if not analysis or not repository:
+        if not analysis:
             return
+        if not repository:
+            raise ValueError("Repository is no longer available.")
 
         try:
             analysis.status = "processing"
             await db.commit()
 
-            analysis_result = await run_correctness_analysis(repository, db, api_key=api_key, model=model)
+            analysis_result = await run_correctness_analysis(repository, db, api_key=api_key, model=model, selected_files=selected_files)
 
             analysis.status = "completed"
             analysis.functional_completeness_correctness_report = json.dumps(
@@ -76,15 +81,12 @@ async def run_analysis_task(
             )
             analysis.overall_score = analysis_result.overall_score
             analysis.summary_report = json.dumps(analysis_result.summary)
-            analysis.completed_at = datetime.utcnow()
+            analysis.completed_at = datetime.now(timezone.utc)
 
             await db.commit()
 
         except Exception as e:
-            analysis.status = "failed"
-            analysis.error_message = str(e)
-            analysis.completed_at = datetime.utcnow()
-            await db.commit()
+            await mark_analysis_failed(db, CorrectnessAnalysis, analysis_id, e)
 
 
 def _get_api_key(body, header_key):
@@ -105,7 +107,8 @@ async def start_correctness_analysis(
     tamu_api_key: Optional[str] = Header(default=None, alias="X-TAMU-API-Key"),
 ):
     """Start a Correctness analysis for a repository."""
-    await require_repository_access(request, db, repository_id)
+    repository = await require_repository_access(request, db, repository_id, with_discovered_files=True)
+    selected_files = snapshot_selected_files(repository, "correctness")
 
     api_key = _get_api_key(body, tamu_api_key)
     model = (body.model and body.model.strip()) if body else None
@@ -118,13 +121,14 @@ async def start_correctness_analysis(
             detail="TAMU API key is required for correctness analysis."
         ) from e
 
-    analysis = CorrectnessAnalysis(repository_id=repository_id, status="pending")
+    analysis = CorrectnessAnalysis(repository_id=repository_id, status="pending", selected_files=selected_files)
     db.add(analysis)
     await db.commit()
     await db.refresh(analysis)
 
     background_tasks.add_task(
         run_analysis_task, analysis.id, repository_id, api_key, model,
+        selected_files=selected_files,
     )
 
     return {"id": analysis.id, "status": analysis.status, "message": "Correctness analysis started"}
@@ -146,6 +150,7 @@ async def list_correctness_analyses(
     return [
         CorrectnessAnalysisListItem(
             id=a.id, repository_id=a.repository_id, status=a.status,
+            selected_files=a.selected_files,
             overall_score=a.overall_score, created_at=a.created_at, completed_at=a.completed_at
         )
         for a in analyses
@@ -164,6 +169,7 @@ async def get_correctness_analysis(
         id=analysis.id,
         repository_id=analysis.repository_id,
         status=analysis.status,
+        selected_files=analysis.selected_files,
         error_message=analysis.error_message,
         functional_completeness_correctness_report=json.loads(analysis.functional_completeness_correctness_report) if analysis.functional_completeness_correctness_report else None,
         functional_correctness_accuracy_report=json.loads(analysis.functional_correctness_accuracy_report) if analysis.functional_correctness_accuracy_report else None,

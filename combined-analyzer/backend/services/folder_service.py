@@ -7,7 +7,10 @@ Handles ZIP file uploads and extraction for repository analysis.
 import uuid
 import shutil
 import zipfile
-from pathlib import Path
+import stat
+import tempfile
+import asyncio
+from pathlib import Path, PureWindowsPath
 from typing import Optional
 
 from fastapi import UploadFile, HTTPException
@@ -15,17 +18,25 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import REPOS_DIR, MAX_UPLOAD_SIZE, ALLOWED_ARCHIVE_TYPES
 from models.repository import Repository, RepositorySource
-from services.github_service import _user_exists_in_public_users
+from services.user_service import require_registered_user
+
+MAX_EXPANDED_SIZE = 512 * 1024 * 1024
+MAX_FILE_SIZE = 32 * 1024 * 1024
+MAX_ARCHIVE_FILES = 10000
+CHUNK_SIZE = 1024 * 1024
 
 
-def _optional_uuid(value: Optional[str]):
-    """Convert optional string to uuid.UUID for Postgres; returns None if empty or invalid."""
-    if not value:
-        return None
+async def run_file_operation(operation, *args):
+    """Wait for filesystem workers before cleaning their directories on cancellation."""
+    task = asyncio.create_task(asyncio.to_thread(operation, *args))
     try:
-        return uuid.UUID(str(value))
-    except (ValueError, TypeError):
-        return None
+        return await asyncio.shield(task)
+    except asyncio.CancelledError:
+        try:
+            await task
+        except Exception:
+            pass  # Preserve cancellation; the caller removes partial output.
+        raise
 
 
 def validate_zip_file(file: UploadFile) -> None:
@@ -59,9 +70,7 @@ async def save_and_extract_zip(
     """
     validate_zip_file(file)
 
-    link_uid = _optional_uuid(owner_user_id)
-    if link_uid is not None and not await _user_exists_in_public_users(db, link_uid):
-        link_uid = None
+    link_uid = await require_registered_user(db, owner_user_id)
 
     # Determine repository name
     if not repo_name:
@@ -72,32 +81,20 @@ async def save_and_extract_zip(
     repo_path = REPOS_DIR / repo_uuid
     repo_path.mkdir(parents=True, exist_ok=True)
 
-    # Save the ZIP file temporarily
-    zip_path = repo_path / "archive.zip"
-
     try:
-        # Read and save the file with size limit check
-        content = await file.read()
-        if len(content) > MAX_UPLOAD_SIZE:
-            shutil.rmtree(repo_path)
-            raise HTTPException(
-                status_code=400,
-                detail=f"File too large. Maximum size is {MAX_UPLOAD_SIZE // (1024*1024)}MB"
-            )
+        # Keep the compressed archive outside the extraction destination.
+        with tempfile.TemporaryDirectory(prefix="repository-upload-") as temporary:
+            zip_path = Path(temporary) / "archive.zip"
+            size = 0
+            with zip_path.open("wb") as target:
+                while chunk := await file.read(CHUNK_SIZE):
+                    size += len(chunk)
+                    if size > MAX_UPLOAD_SIZE:
+                        raise HTTPException(400, "Compressed archive exceeds upload limit")
+                    target.write(chunk)
+            await run_file_operation(extract_zip_safely, zip_path, repo_path)
+        await run_file_operation(flatten_single_root_directory, repo_path)
 
-        with open(zip_path, "wb") as f:
-            f.write(content)
-
-        # Extract the ZIP file
-        extract_zip_safely(zip_path, repo_path)
-
-        # Remove the ZIP file after extraction
-        zip_path.unlink()
-
-        # If extraction created a single root folder, move contents up
-        flatten_single_root_directory(repo_path)
-
-        # Create Repository record (optionally linked to Supabase user)
         repository = Repository(
             name=repo_name,
             source_type=RepositorySource.folder_upload.value,
@@ -105,8 +102,7 @@ async def save_and_extract_zip(
             owner_user_id=link_uid,
         )
         db.add(repository)
-        await db.commit()
-        await db.refresh(repository)
+        await db.flush()
 
         return repository
 
@@ -117,6 +113,10 @@ async def save_and_extract_zip(
             detail="Invalid ZIP file. The file appears to be corrupted."
         )
     except HTTPException:
+        shutil.rmtree(repo_path, ignore_errors=True)
+        raise
+    except asyncio.CancelledError:
+        shutil.rmtree(repo_path, ignore_errors=True)
         raise
     except Exception as e:
         shutil.rmtree(repo_path, ignore_errors=True)
@@ -127,33 +127,54 @@ async def save_and_extract_zip(
 
 
 def extract_zip_safely(zip_path: Path, extract_to: Path) -> None:
-    """
-    Safely extract a ZIP file, preventing path traversal attacks.
-    """
-    with zipfile.ZipFile(zip_path, 'r') as zip_ref:
-        for member in zip_ref.namelist():
-            # Skip directories
-            if member.endswith('/'):
-                continue
-
-            # Prevent path traversal attacks
-            member_path = Path(member)
-            if member_path.is_absolute() or '..' in member_path.parts:
-                raise HTTPException(
-                    status_code=400,
-                    detail="ZIP file contains invalid paths"
+    """Extract bounded regular files only, with portable path containment."""
+    if zip_path.stat().st_size > MAX_UPLOAD_SIZE:
+        raise HTTPException(400, "Compressed archive exceeds upload limit")
+    base = extract_to.resolve()
+    expanded = 0
+    with zipfile.ZipFile(zip_path, "r") as archive:
+        members = archive.infolist()
+        if len(members) > MAX_ARCHIVE_FILES:
+            raise HTTPException(400, "Archive contains too many entries")
+        declared_size = 0
+        for member in members:
+            name = member.filename.replace("\\", "/")
+            parts = name.split("/")
+            mode = member.external_attr >> 16
+            kind = stat.S_IFMT(mode)
+            if (
+                not name or name.startswith("/") or PureWindowsPath(name).drive
+                or ".." in parts or any(
+                    ":" in part or part.rstrip(" .") != part
+                    or part.split(".")[0].upper() in {
+                        "CON", "PRN", "AUX", "NUL",
+                        *(f"COM{i}" for i in range(1, 10)),
+                        *(f"LPT{i}" for i in range(1, 10)),
+                    }
+                    for part in parts if part
                 )
-
-            # Skip hidden files and common ignore patterns
-            if should_skip_file(member):
+                or kind not in (0, stat.S_IFREG, stat.S_IFDIR)
+            ):
+                raise HTTPException(400, "ZIP file contains invalid paths or links")
+            target = base.joinpath(*parts)
+            if not target.resolve().is_relative_to(base):
+                raise HTTPException(400, "ZIP file escapes repository directory")
+            if target.is_symlink() or any(p.is_symlink() for p in target.parents):
+                raise HTTPException(400, "ZIP file contains a symbolic link")
+            declared_size += member.file_size
+            if member.file_size > MAX_FILE_SIZE or declared_size > MAX_EXPANDED_SIZE:
+                raise HTTPException(400, "Expanded archive exceeds size limit")
+            if member.is_dir() or name.endswith("/") or should_skip_file(name):
                 continue
-
-            # Extract the file
-            target_path = extract_to / member
-            target_path.parent.mkdir(parents=True, exist_ok=True)
-
-            with zip_ref.open(member) as source, open(target_path, 'wb') as target:
-                target.write(source.read())
+            target.parent.mkdir(parents=True, exist_ok=True)
+            written = 0
+            with archive.open(member) as source, target.open("xb") as destination:
+                while chunk := source.read(CHUNK_SIZE):
+                    written += len(chunk)
+                    expanded += len(chunk)
+                    if written > MAX_FILE_SIZE or expanded > MAX_EXPANDED_SIZE:
+                        raise HTTPException(400, "Expanded archive exceeds size limit")
+                    destination.write(chunk)
 
 
 def should_skip_file(file_path: str) -> bool:
@@ -194,23 +215,15 @@ def flatten_single_root_directory(repo_path: Path) -> None:
     If extraction created a single root folder, move its contents up one level.
     This handles ZIPs that have a single root directory containing all files.
     """
-    items = [item for item in repo_path.iterdir() if item.name != 'archive.zip']
-
+    items = list(repo_path.iterdir())
     if len(items) == 1 and items[0].is_dir():
-        root_dir = items[0]
-
-        # Move all contents from the single directory to repo_path
-        for item in root_dir.iterdir():
-            dest = repo_path / item.name
-            if dest.exists():
-                if dest.is_dir():
-                    shutil.rmtree(dest)
-                else:
-                    dest.unlink()
-            shutil.move(str(item), str(dest))
-
-        # Remove the now-empty root directory
-        root_dir.rmdir()
+        # Rename the root outside the destination before moving its children.
+        # In particular project/project must not delete its own source ancestor.
+        with tempfile.TemporaryDirectory(dir=repo_path.parent, prefix="flatten-") as temporary:
+            staged = Path(temporary) / "root"
+            shutil.move(str(items[0]), str(staged))
+            for item in staged.iterdir():
+                shutil.move(str(item), str(repo_path / item.name))
 
 
 def delete_repository_files(local_path: str) -> bool:

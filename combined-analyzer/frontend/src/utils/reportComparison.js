@@ -149,23 +149,47 @@ export function deterministicCompareFindings(baselineFindings, currentFindings) 
   };
 }
 
+export function validateAiMatches(matches, baselineCount, currentCount) {
+  if (!Array.isArray(matches)) {
+    throw new Error('AI comparison returned invalid matches; expected an array.');
+  }
+  const baselineIndexes = new Set();
+  const currentIndexes = new Set();
+  for (const match of matches) {
+    if (!match || typeof match !== 'object' || Array.isArray(match) ||
+        !Number.isInteger(match.baseline_index) || !Number.isInteger(match.current_index) ||
+        match.baseline_index < 0 || match.baseline_index >= baselineCount ||
+        match.current_index < 0 || match.current_index >= currentCount ||
+        typeof match.confidence !== 'number' || !Number.isFinite(match.confidence) ||
+        match.confidence < 0 || match.confidence > 1 ||
+        baselineIndexes.has(match.baseline_index) || currentIndexes.has(match.current_index)) {
+      throw new Error('AI comparison returned invalid or duplicate match indexes or confidence.');
+    }
+    baselineIndexes.add(match.baseline_index);
+    currentIndexes.add(match.current_index);
+  }
+  return matches;
+}
+
 export function mergeAiMatches(deterministicResult, aiMatches, confidenceThreshold = 0.75) {
+  validateAiMatches(
+    aiMatches,
+    deterministicResult.unmatchedBaseline.length,
+    deterministicResult.unmatchedCurrent.length
+  );
   const acceptedBaseline = new Set();
   const acceptedCurrent = new Set();
   const aiUnchanged = [];
 
-  (Array.isArray(aiMatches) ? aiMatches : []).forEach((match) => {
-    const baselineIndex = Number(match?.baseline_index);
-    const currentIndex = Number(match?.current_index);
-    const confidence = Number(match?.confidence ?? 0);
+  aiMatches.forEach((match) => {
+    const baselineIndex = match.baseline_index;
+    const currentIndex = match.current_index;
+    const confidence = match.confidence;
 
-    if (!Number.isInteger(baselineIndex) || !Number.isInteger(currentIndex)) return;
     if (confidence < confidenceThreshold) return;
-    if (acceptedBaseline.has(baselineIndex) || acceptedCurrent.has(currentIndex)) return;
 
     const baselineEntry = deterministicResult.unmatchedBaseline[baselineIndex];
     const currentEntry = deterministicResult.unmatchedCurrent[currentIndex];
-    if (!baselineEntry || !currentEntry) return;
 
     acceptedBaseline.add(baselineIndex);
     acceptedCurrent.add(currentIndex);

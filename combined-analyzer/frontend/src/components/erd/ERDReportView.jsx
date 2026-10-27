@@ -189,6 +189,11 @@ function IssueList({ title, issues, style, renderItem }) {
       {issues.map((issue, idx) => (
         <div key={idx} style={{ ...styles.issueCard, ...style }}>
           {renderItem(issue)}
+          {issue.user_story_ids?.length > 0 && (
+            <div style={styles.issueReason}>
+              <strong>User stories:</strong> {issue.user_story_ids.join(', ')}
+            </div>
+          )}
         </div>
       ))}
     </div>
@@ -289,32 +294,60 @@ function UserStoryCoverage({ coverage }) {
 export default function ERDReportView({ analysisId, onBack, chatModel, chatApiKey }) {
   const [analysis, setAnalysis] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [retryCount, setRetryCount] = useState(0);
 
   useEffect(() => {
-    fetchAnalysis();
-  }, [analysisId]);
-
-  const fetchAnalysis = async () => {
+    let active = true;
+    let cancelPolling;
+    setAnalysis(null);
+    setError(null);
     setLoading(true);
-    try {
-      const data = await getERDAnalysis(analysisId);
-      setAnalysis(data);
 
-      if (data.status === 'pending' || data.status === 'processing') {
-        pollAnalysis('erd', analysisId, (updated) => {
-          setAnalysis(updated);
-          if (updated.status === 'completed' || updated.status === 'failed') {
-            setLoading(false);
-          }
-        });
-      } else {
-        setLoading(false);
-      }
-    } catch (err) {
-      console.error('Error fetching analysis:', err);
+    const handleError = (err) => {
+      if (!active) return;
+      setError(err?.message || 'Unable to load the analysis. Please try again.');
       setLoading(false);
-    }
-  };
+    };
+    const fetchAnalysis = async () => {
+      try {
+        const data = await getERDAnalysis(analysisId);
+        if (!active) return;
+        setAnalysis(data);
+        if (data.status === 'pending' || data.status === 'processing') {
+          cancelPolling = pollAnalysis('erd', analysisId, (updated) => {
+            if (!active) return;
+            setAnalysis(updated);
+            if (updated.status === 'completed' || updated.status === 'failed') setLoading(false);
+          }, 5000, handleError);
+        } else {
+          setLoading(false);
+        }
+      } catch (err) {
+        handleError(err);
+      }
+    };
+    fetchAnalysis();
+    return () => {
+      active = false;
+      cancelPolling?.();
+    };
+  }, [analysisId, retryCount]);
+
+  if (error) {
+    return (
+      <div style={styles.container}>
+        <div style={styles.header}>
+          <h2 style={styles.title}>Unable to Load ERD Analysis</h2>
+          <button style={styles.backButton} onClick={onBack}>Back</button>
+        </div>
+        <div style={styles.error} role="alert">
+          <p>{error}</p>
+          <button style={styles.backButton} onClick={() => setRetryCount(count => count + 1)}>Retry</button>
+        </div>
+      </div>
+    );
+  }
 
   if (loading || !analysis || analysis.status === 'pending' || analysis.status === 'processing') {
     return (

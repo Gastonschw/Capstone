@@ -1,5 +1,4 @@
 import React, { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
 import { supabase, isSupabaseConfigured } from '../lib/supabaseClient';
 
 function GoogleIcon() {
@@ -114,16 +113,10 @@ const styles = {
     border: '1px solid #dadce0',
     boxShadow: '0 1px 2px rgba(0,0,0,0.05)',
   },
-  btnPrimary: {
-    background: 'linear-gradient(135deg, #1e3a5f 0%, #2d5a87 100%)',
-    color: '#fff',
-    boxShadow: '0 4px 14px rgba(30,58,95,0.35)',
-  },
 };
 
 export default function LandingPage({ loginError = null, onClearLoginError }) {
   const [signingIn, setSigningIn] = useState(false);
-  const navigate = useNavigate();
 
   const handleSignIn = async () => {
     if (!supabase?.auth) return;
@@ -139,9 +132,6 @@ export default function LandingPage({ loginError = null, onClearLoginError }) {
     }
   };
 
-  const handleContinueToAnalyzer = () => {
-    navigate('/analyzer');
-  };
 
   const pageDecorations = (
     <>
@@ -168,20 +158,17 @@ export default function LandingPage({ loginError = null, onClearLoginError }) {
     </>
   );
 
-  const cardContent = (isGoogleAuth) => (
+  const cardContent = (
     <>
       <div style={styles.logoWrap}>&#128202;</div>
       <div style={styles.badge}>ERD + Integrity Analysis</div>
       <h1 style={styles.title}>Combined Analyzer</h1>
       <p style={styles.subtitle}>
-        {isGoogleAuth
-          ? 'Sign in to analyze your codebase with ERD and Integrity reports.'
-          : 'Sign-in is not configured; continue to use the app.'}
+        Sign in to analyze your codebase with ERD and Integrity reports.
       </p>
-      {isGoogleAuth && loginError && (
+      {loginError && (
         <div style={styles.error}>{loginError}</div>
       )}
-      {isGoogleAuth ? (
         <button
           type="button"
           style={{ ...styles.btn, ...styles.btnGoogle }}
@@ -201,23 +188,6 @@ export default function LandingPage({ loginError = null, onClearLoginError }) {
           <GoogleIcon />
           {signingIn ? 'Signing in…' : 'Sign in with Google'}
         </button>
-      ) : (
-        <button
-          type="button"
-          style={{ ...styles.btn, ...styles.btnPrimary }}
-          onClick={handleContinueToAnalyzer}
-          onMouseEnter={(e) => {
-            e.currentTarget.style.boxShadow = '0 6px 20px rgba(30,58,95,0.4)';
-            e.currentTarget.style.transform = 'translateY(-1px)';
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.boxShadow = '0 4px 14px rgba(30,58,95,0.35)';
-            e.currentTarget.style.transform = 'translateY(0)';
-          }}
-        >
-          Continue to Analyzer
-        </button>
-      )}
     </>
   );
 
@@ -225,7 +195,7 @@ export default function LandingPage({ loginError = null, onClearLoginError }) {
     return (
       <div style={styles.page}>
         {pageDecorations}
-        <div style={styles.card}>{cardContent(false)}</div>
+        <div style={styles.card} role="alert">Authentication configuration error. Configure Supabase before using the analyzer.</div>
       </div>
     );
   }
@@ -233,7 +203,7 @@ export default function LandingPage({ loginError = null, onClearLoginError }) {
   return (
     <div style={styles.page}>
       {pageDecorations}
-      <div style={styles.card}>{cardContent(true)}</div>
+      <div style={styles.card}>{cardContent}</div>
     </div>
   );
 }

@@ -1,174 +1,131 @@
-import React, { useState, useEffect, lazy, Suspense } from 'react';
+import React, { useState, useEffect, useRef, lazy, Suspense } from 'react';
 import { Routes, Route, useNavigate, useLocation } from 'react-router-dom';
 import LandingPage from './pages/LandingPage';
 import AnalyzerPage from './pages/AnalyzerPage';
 import JoinClassPage from './pages/JoinClassPage';
-
-const ComparisonPage = lazy(() => import('./pages/ComparisonPage'));
-import { setCurrentUserId, listMyClasses } from './api';
+import { listMyClasses, getGitHubAuthStatus, setSessionId } from './api';
 import { supabase, isSupabaseConfigured } from './lib/supabaseClient';
 import AppLoading from './components/common/AppLoading';
 
-const LOGIN_ERROR_MESSAGE = 'Sign-in was cancelled or failed. Please try again.';
+const ComparisonPage = lazy(() => import('./pages/ComparisonPage'));
 
 export default function App() {
   const [authUser, setAuthUser] = useState(null);
   const [authLoading, setAuthLoading] = useState(isSupabaseConfigured);
   const [loginError, setLoginError] = useState(null);
   const [classGate, setClassGate] = useState({ status: 'idle' });
+  const [classVersion, setClassVersion] = useState(0);
+  const [callbackPending, setCallbackPending] = useState(true);
+  const callback = useRef(new URLSearchParams(window.location.search));
+  const currentIdentity = useRef(null);
   const navigate = useNavigate();
   const location = useLocation();
 
   useEffect(() => {
-    if (!isSupabaseConfigured || !supabase) {
+    if (!supabase) return;
+    let active = true;
+    const update = (session) => {
+      if (!active) return;
+      const user = session?.user ?? null;
+      if (currentIdentity.current !== user?.id) {
+        currentIdentity.current = user?.id;
+        setClassGate({ status: 'idle' });
+      }
+      setAuthUser(user);
       setAuthLoading(false);
-      return;
-    }
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      setAuthUser(session?.user ?? null);
-      setCurrentUserId(session?.user?.id ?? null);
+    };
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => update(session));
+    supabase.auth.getSession().then(({ data: { session }, error }) => {
+      if (error && active) setLoginError(error.message);
+      update(session);
+    }).catch((error) => {
+      if (active) { setLoginError(error.message); setAuthLoading(false); }
     });
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setAuthUser(session?.user ?? null);
-      setCurrentUserId(session?.user?.id ?? null);
-      setAuthLoading(false);
-    });
-    return () => subscription.unsubscribe();
+    return () => { active = false; subscription.unsubscribe(); };
+  }, []);
+
+  // Consume OAuth results before any route gate can replace the callback URL.
+  useEffect(() => {
+    if (authLoading) return;
+    let active = true;
+    const consume = async () => {
+      const hash = new URLSearchParams(window.location.hash.slice(1));
+      if (hash.get('error') || hash.get('error_code')) {
+        setLoginError(hash.get('error_description') || 'Sign-in was cancelled or failed. Please try again.');
+        window.history.replaceState({}, '', window.location.pathname + window.location.search);
+      }
+      const params = callback.current;
+      const result = params.get('github_auth');
+      try {
+        if (result === 'success') {
+          const sessionId = params.get('session_id');
+          if (!authUser || !sessionId) throw new Error('Sign in with the account that connected GitHub, then reconnect GitHub.');
+          const status = await getGitHubAuthStatus(sessionId);
+          if (!status.authenticated) throw new Error('GitHub connection could not be verified for this account.');
+          if (active && currentIdentity.current === authUser.id) setSessionId(sessionId);
+        } else if (result === 'error') {
+          throw new Error(params.get('message') || 'GitHub authentication failed.');
+        }
+      } catch (error) {
+        if (active) setLoginError(error.message);
+      } finally {
+        if (active) {
+          callback.current = new URLSearchParams();
+          if (result) {
+            const url = new URL(window.location.href);
+            ['github_auth', 'session_id', 'message'].forEach((key) => url.searchParams.delete(key));
+            window.history.replaceState({}, '', url.pathname + url.search + url.hash);
+          }
+          setCallbackPending(false);
+        }
+      }
+    };
+    consume();
+    return () => { active = false; };
+  }, [authLoading, authUser?.id]);
+
+  useEffect(() => {
+    const refresh = () => setClassVersion((value) => value + 1);
+    window.addEventListener('combined-analyzer-classes-refresh', refresh);
+    return () => window.removeEventListener('combined-analyzer-classes-refresh', refresh);
   }, []);
 
   useEffect(() => {
-    if (authLoading) return;
-    if (!isSupabaseConfigured || !authUser) {
-      setClassGate({ status: 'skipped' });
-      return;
-    }
-    let cancelled = false;
-    // Only show the full-screen gate during the first class lookup.
-    // Later refreshes should not unmount the current page tree.
-    setClassGate((prev) => (prev.status === 'idle' ? { status: 'loading' } : prev));
-    listMyClasses()
-      .then((data) => {
-        if (cancelled) return;
-        const role = data.role || 'general';
-        const enrolled = data.enrolled || [];
-        if (role === 'admin') {
-          setClassGate({ status: 'admin' });
-        } else if (enrolled.length === 0) {
-          setClassGate({ status: 'need-join' });
-        } else {
-          setClassGate({ status: 'student-ok' });
-        }
-      })
-      .catch(() => {
-        if (cancelled) return;
-        setClassGate({ status: 'error' });
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [authLoading, authUser, isSupabaseConfigured]);
+    if (authLoading || !authUser) return;
+    let active = true;
+    listMyClasses().then((data) => {
+      if (!active || currentIdentity.current !== authUser.id) return;
+      const allowed = data.role === 'admin' || (data.teaching || []).length > 0 || (data.enrolled || []).length > 0;
+      setClassGate({ status: allowed ? 'allowed' : 'need-join' });
+    }).catch(() => { if (active && currentIdentity.current === authUser.id) setClassGate({ status: 'error' }); });
+    return () => { active = false; };
+  }, [authLoading, authUser?.id, classVersion]);
 
   useEffect(() => {
-    const onClassesRefresh = () => {
-      if (!authUser || !isSupabaseConfigured || authLoading) return;
-      setClassGate((prev) => (prev.status === 'idle' ? { status: 'loading' } : prev));
-      listMyClasses()
-        .then((data) => {
-          const role = data.role || 'general';
-          const enrolled = data.enrolled || [];
-          if (role === 'admin') {
-            setClassGate({ status: 'admin' });
-          } else if (enrolled.length === 0) {
-            setClassGate({ status: 'need-join' });
-          } else {
-            setClassGate({ status: 'student-ok' });
-          }
-        })
-        .catch(() => setClassGate({ status: 'error' }));
-    };
-    window.addEventListener('combined-analyzer-classes-refresh', onClassesRefresh);
-    return () => window.removeEventListener('combined-analyzer-classes-refresh', onClassesRefresh);
-  }, [authLoading, authUser, isSupabaseConfigured]);
-
-  useEffect(() => {
-    if (authLoading) return;
-
-    const pathname = location.pathname;
-    const hash = window.location.hash;
-    if (hash) {
-      const params = new URLSearchParams(hash.slice(1));
-      const error = params.get('error') || params.get('error_code');
-      if (error) {
-        window.history.replaceState({}, '', pathname + (window.location.search || ''));
-        setLoginError(LOGIN_ERROR_MESSAGE);
-        navigate('/', { replace: true });
-        return;
-      }
-    }
-
-    if (authUser && pathname === '/') {
-      if (!isSupabaseConfigured) {
-        navigate('/analyzer', { replace: true });
-        return;
-      }
+    if (authLoading || callbackPending || !isSupabaseConfigured) return;
+    const path = location.pathname;
+    if (!authUser) {
+      if (path !== '/') navigate('/', { replace: true });
       return;
     }
-
-    if (!authUser && isSupabaseConfigured && (pathname === '/analyzer' || pathname === '/compare' || pathname === '/join-class')) {
-      if (!window.location.hash) {
-        navigate('/', { replace: true });
-      }
-      return;
-    }
-
-    if (!isSupabaseConfigured && pathname === '/') {
-      navigate('/analyzer', { replace: true });
-    }
-  }, [authLoading, authUser, location.pathname, navigate, isSupabaseConfigured]);
-
-  useEffect(() => {
-    if (authLoading) return;
-    if (!authUser || !isSupabaseConfigured) return;
-    if (classGate.status === 'idle' || classGate.status === 'loading') return;
-    if (classGate.status !== 'need-join' && classGate.status !== 'admin' && classGate.status !== 'student-ok' && classGate.status !== 'error') return;
-
-    const pathname = location.pathname;
+    if (classGate.status === 'idle' || classGate.status === 'error') return;
     const needsJoin = classGate.status === 'need-join';
-
-    if (pathname === '/' && authUser) {
+    if (path === '/' || (needsJoin && path !== '/join-class') || (!needsJoin && path === '/join-class')) {
       navigate(needsJoin ? '/join-class' : '/analyzer', { replace: true });
-      return;
     }
+  }, [authLoading, callbackPending, authUser?.id, classGate.status, location.pathname, navigate]);
 
-    if ((pathname === '/analyzer' || pathname === '/compare') && needsJoin) {
-      navigate('/join-class', { replace: true });
-      return;
-    }
-
-    if (pathname === '/join-class' && !needsJoin) {
-      navigate('/analyzer', { replace: true });
-    }
-  }, [authLoading, authUser, isSupabaseConfigured, location.pathname, classGate.status, navigate]);
-
-  const gatePending =
-    isSupabaseConfigured && authUser && (classGate.status === 'idle' || classGate.status === 'loading');
-
-  if (authLoading && isSupabaseConfigured) {
-    return <AppLoading message="Signing you in…" subMessage="Verifying your account." />;
-  }
-
-  if (gatePending) {
-    return (
-      <AppLoading
-        message="Loading your classes…"
-        subMessage="Checking enrollment and where to send you next."
-      />
-    );
-  }
+  if (!isSupabaseConfigured) return <div role="alert">Authentication configuration error: set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY. Anonymous access is disabled.</div>;
+  if (authLoading || callbackPending) return <AppLoading message="Signing you in…" subMessage="Verifying your account and connections." />;
+  if (authUser && classGate.status === 'idle') return <AppLoading message="Loading your classes…" />;
+  if (authUser && classGate.status === 'error') return <div role="alert">Unable to verify class access. <button onClick={() => setClassVersion((value) => value + 1)}>Retry</button></div>;
+  if (!authUser && location.pathname !== '/') return <AppLoading message="Returning to sign in…" />;
+  if (authUser && classGate.status === 'need-join' && location.pathname !== '/join-class') return <AppLoading message="Opening class enrollment…" />;
 
   return (
-    <Suspense fallback={<AppLoading message="Loading…" subMessage="Opening this page." />}>
-      <Routes>
+    <Suspense fallback={<AppLoading message="Loading…" />}>
+      {loginError && authUser && <div role="alert">{loginError}<button onClick={() => setLoginError(null)}>Dismiss</button></div>}
+      <Routes key={authUser?.id || 'signed-out'}>
         <Route path="/" element={<LandingPage loginError={loginError} onClearLoginError={() => setLoginError(null)} />} />
         <Route path="/join-class" element={<JoinClassPage />} />
         <Route path="/analyzer" element={<AnalyzerPage />} />
