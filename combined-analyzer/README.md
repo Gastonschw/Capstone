@@ -93,6 +93,18 @@ npm run dev
 
 The frontend will be available at http://localhost:5173
 
+### Restored semester deployment
+
+This branch retains the April 28 application behavior and Render's free backend plan. The public `/privacy.html` page is retained for the Google OAuth production configuration.
+
+- Backend `backend/.env`: use the current Supabase session-pooler `DATABASE_URL`, keep `GITHUB_TOKEN_ENCRYPTION_KEY` stable, and set `FRONTEND_URL=http://localhost:5173` for local development. Preserve the existing GitHub and TAMU credentials.
+- Frontend `frontend/.env`: set `VITE_API_URL=http://localhost:8000/api`, plus the same project's `VITE_SUPABASE_URL` and public `VITE_SUPABASE_ANON_KEY`. Both `.env` files are ignored by Git.
+- In Render, use the deployed backend `/api` URL and frontend origin instead of localhost. Rebuild the frontend after changing its environment.
+- Supabase Auth must allow `http://localhost:5173/analyzer` and the deployed frontend's `/analyzer` redirect. Keep Google OAuth in production for student access. New accounts start as general users; an administrator must assign the teacher role in `public.users`.
+- The current Supabase database already has the application schema and identity triggers. This older backend creates missing ORM tables but does not apply SQL migrations automatically. Do not drop the migrated database or relax its existing RLS policies to restore this version.
+
+Known semester-version limitations remain: backend identity relies on caller-supplied `X-User-Id`, and free Render storage is ephemeral. Uploaded source files can disappear on restarts/deploys even though database records remain. This restoration does not claim to fix those security or persistence issues.
+
 ## API Endpoints
 
 ### Shared
