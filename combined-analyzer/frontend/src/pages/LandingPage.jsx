@@ -188,6 +188,9 @@ export default function LandingPage({ loginError = null, onClearLoginError }) {
           <GoogleIcon />
           {signingIn ? 'Signing in…' : 'Sign in with Google'}
         </button>
+      <p style={{ margin: '20px 0 0', fontSize: '14px' }}>
+        <a href="/privacy.html" style={{ color: '#2d5a87' }}>Privacy Policy</a>
+      </p>
     </>
   );
 

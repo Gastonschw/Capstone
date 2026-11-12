@@ -72,6 +72,8 @@ npm run dev
 
 Allow the frontend origin and `/analyzer` redirect in Supabase Auth. Enable Google and configure its provider credentials in Supabase. Supabase JWTs are sent in `Authorization: Bearer ...`; `X-User-Id` is not authentication and is ignored.
 
+The public privacy policy is served independently of authentication at `/privacy.html` and linked from the sign-in page. Keep its operator contact and data-handling description current. For student access, configure Google's OAuth branding with the deployed homepage and privacy-policy URLs, register the Supabase `/auth/v1/callback` URI on the web client, and publish the OAuth audience to production; Testing mode restricts access to explicitly listed test users.
+
 ## GitHub OAuth
 
 1. The signed-in frontend posts to `/api/github/auth` using its Supabase bearer token.
