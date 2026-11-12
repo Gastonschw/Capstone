@@ -12,3 +12,4 @@ cryptography>=42.0.0
 pydantic>=2.5.0
 python-dotenv>=1.0.0
 PyGithub>=2.1.1
+pypdf>=5.0,<7

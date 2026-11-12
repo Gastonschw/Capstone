@@ -105,6 +105,8 @@ This branch retains the April 28 application behavior and Render's free backend 
 
 Known semester-version limitations remain: backend identity relies on caller-supplied `X-User-Id`, and free Render storage is ephemeral. Uploaded source files can disappear on restarts/deploys even though database records remain. This restoration does not claim to fix those security or persistence issues.
 
+Attached project notebooks are discovered from repository ZIPs and GitHub imports. Jupyter (`.ipynb`) code/Markdown cells are available to code-based analyses; cell outputs are excluded. Word (`.docx`) and PDF (`.pdf`) notebooks are extracted as requirements documentation and made available to ERD and quality-characteristic analyses.
+
 ## API Endpoints
 
 ### Shared

@@ -24,6 +24,7 @@ from sqlalchemy import select
 from models.repository import Repository, DiscoveredFile, FileType
 from models.erd_analysis import ERDAnalysis
 from services.chat_service import get_client, TAMU_DEFAULT_MODEL
+from services.content_extraction import read_file_content
 
 
 def _collect_stream(stream) -> str:
@@ -476,12 +477,8 @@ def read_user_stories_from_files(repo_path: str, story_files: List[str]) -> str:
 
     for file_path in story_files:
         full_path = repo / file_path
-        try:
-            with open(full_path, 'r', encoding='utf-8', errors='ignore') as f:
-                content = f.read()
-            all_stories.append(f"## From: {file_path}\n\n{content}")
-        except Exception as e:
-            all_stories.append(f"## From: {file_path}\n\n[Error reading file: {e}]")
+        content = read_file_content(full_path)
+        all_stories.append(f"## From: {file_path}\n\n{content}")
 
     return "\n\n---\n\n".join(all_stories)
 
@@ -690,10 +687,7 @@ async def run_erd_analysis(
         if text_files:
             for tf in text_files:
                 full_path = Path(repo_path) / tf.file_path
-                try:
-                    content = full_path.read_text(encoding='utf-8', errors='ignore')
-                except Exception:
-                    content = ""
+                content = read_file_content(full_path)
 
                 if not content.strip():
                     continue

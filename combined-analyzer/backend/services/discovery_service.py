@@ -21,6 +21,7 @@ from sqlalchemy import select, delete
 
 from models.repository import Repository, DiscoveredFile, FileType
 from services.chat_service import get_client, TAMU_DEFAULT_MODEL
+from services.content_extraction import DOCUMENT_EXTENSIONS, read_file_content
 
 # Auto-select ERD / user-story rows for ERD analysis when AI confidence is at least this.
 ERD_AUTO_SELECT_MIN_CONFIDENCE = 60
@@ -36,10 +37,11 @@ CODE_CONFIG_AUTO_SELECT_MIN_RELEVANCE = 50
 IMAGE_EXTENSIONS = {'.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.bmp'}
 
 # Text file extensions for user story detection
-TEXT_EXTENSIONS = {'.md', '.txt', '.rst', '.feature', '.story', '.adoc'}
+TEXT_EXTENSIONS = {'.md', '.txt', '.rst', '.feature', '.story', '.adoc'} | DOCUMENT_EXTENSIONS
 
 # Code extensions for Integrity analysis
 CODE_EXTENSIONS = {
+    '.ipynb': 'jupyter-notebook',
     '.py': 'python',
     '.js': 'javascript',
     '.ts': 'typescript',
@@ -140,11 +142,13 @@ def score_user_story_candidate(file_path: str, content: str) -> int:
     # Check filename hints
     filename = Path(file_path).stem.lower()
     story_keywords = ['story', 'stories', 'requirement', 'feature', 'user', 'acceptance', 'spec']
-
-    for keyword in story_keywords:
-        if keyword in filename:
-            score += 15
-            break
+    if 'notebook' in filename:
+        score += 30
+    else:
+        for keyword in story_keywords:
+            if keyword in filename:
+                score += 15
+                break
 
     # Content analysis
     content_lower = content.lower()
@@ -245,14 +249,10 @@ def scan_repository_files(repo_path: str) -> Dict[str, List[Dict]]:
             rel_path = str(file_path.relative_to(repo))
             suffix = file_path.suffix.lower()
 
-            # Read content for text-based files
+            # Read analysis-ready content, including attached notebooks/documents.
             content = ""
             if suffix in TEXT_EXTENSIONS or suffix in CODE_EXTENSIONS or suffix in CONFIG_EXTENSIONS:
-                try:
-                    with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-                        content = f.read(5000).replace('\x00', '')  # Read first 5KB, strip null bytes
-                except Exception:
-                    continue
+                content = read_file_content(file_path, max_chars=5000)
 
             # Categorize file
             if suffix in IMAGE_EXTENSIONS:

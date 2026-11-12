@@ -23,6 +23,7 @@ from sqlalchemy import select
 
 from models.repository import Repository, DiscoveredFile, FileType
 from services.chat_service import get_client, TAMU_DEFAULT_MODEL
+from services.content_extraction import read_file_content as extract_file_content
 
 
 def _extract_content_from_sse(sse_text: str) -> str:
@@ -130,13 +131,8 @@ class IntegrityAnalysisResult:
 
 
 def read_file_content(repo_path: str, file_path: str) -> str:
-    """Read the full content of a file."""
-    full_path = Path(repo_path) / file_path
-    try:
-        with open(full_path, 'r', encoding='utf-8', errors='ignore') as f:
-            return f.read()
-    except Exception as e:
-        return f"Error reading file: {e}"
+    """Read analysis-ready content from source files and attached documents."""
+    return extract_file_content(Path(repo_path) / file_path)
 
 
 def parse_json_response(response_text: str) -> Dict:
@@ -252,12 +248,9 @@ async def load_user_stories_for_repo(
     all_stories = []
     for sf in story_files:
         full_path = Path(repo_path) / sf.file_path
-        try:
-            with open(full_path, 'r', encoding='utf-8', errors='ignore') as f:
-                content = f.read()
+        content = extract_file_content(full_path)
+        if content and not content.startswith("[Error reading file:"):
             all_stories.append(f"## From: {sf.file_path}\n\n{content}")
-        except Exception:
-            pass
 
     return "\n\n---\n\n".join(all_stories)
 

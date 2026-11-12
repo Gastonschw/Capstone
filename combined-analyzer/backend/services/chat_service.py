@@ -25,6 +25,7 @@ from models.compliance_analysis import ComplianceAnalysis
 from models.correctness_analysis import CorrectnessAnalysis
 from models.usability_analysis import UsabilityAnalysis
 from models.maintainability_analysis import MaintainabilityAnalysis
+from services.content_extraction import read_file_content as extract_file_content
 
 load_dotenv()
 
@@ -119,15 +120,8 @@ def encode_image_to_base64(image_path: str) -> tuple[str, str]:
 
 
 def read_file_content(file_path: str, max_chars: int = 10000) -> str:
-    """Read file content with optional truncation."""
-    try:
-        with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-            content = f.read()
-        if len(content) > max_chars:
-            content = content[:max_chars] + "\n... (truncated)"
-        return content
-    except Exception as e:
-        return f"[Error reading file: {e}]"
+    """Read analysis-ready source or attached document content."""
+    return extract_file_content(file_path, max_chars=max_chars)
 
 
 async def build_erd_context(
