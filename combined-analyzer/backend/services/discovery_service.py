@@ -494,14 +494,21 @@ async def run_file_discovery(
     for txt in sorted(files['text_files'], key=lambda x: ai_story_scores.get(x['path'], x['confidence']), reverse=True)[:50]:
         score = ai_story_scores.get(txt['path'], txt['confidence'])
         preview = ai_story_previews.get(txt['path'], txt.get('preview', '')[:500] if txt.get('preview') else None)
+        is_attached_document = Path(txt['path']).suffix.lower() in DOCUMENT_EXTENSIONS
+        auto_document = is_attached_document and score >= ERD_AUTO_SELECT_MIN_CONFIDENCE
         db_file = DiscoveredFile(
             repository_id=repository_id,
             file_path=txt['path'],
             file_type=FileType.user_story.value,
             confidence_score=score,
+            relevance_score=score if is_attached_document else 0,
             content_preview=preview,
             is_selected_erd=score >= ERD_AUTO_SELECT_MIN_CONFIDENCE,
-            is_selected_integrity=False,
+            is_selected_integrity=auto_document,
+            is_selected_compliance=auto_document,
+            is_selected_correctness=auto_document,
+            is_selected_usability=auto_document,
+            is_selected_maintainability=auto_document,
         )
         db.add(db_file)
         saved_files.append(db_file)

@@ -361,6 +361,12 @@ const styles = {
   },
 };
 
+const isQualityAnalysisFile = (file) => {
+  if (file.file_type === 'code' || file.file_type === 'config') return true;
+  const path = (file.file_path || '').toLowerCase();
+  return file.file_type === 'user_story' && (path.endsWith('.pdf') || path.endsWith('.docx'));
+};
+
 export default function RepositoryBrowser({ repositoryId, onBack, onAnalysisComplete, tamuApiKey = '', tamuModel = '' }) {
   const [repository, setRepository] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -558,9 +564,8 @@ export default function RepositoryBrowser({ repositoryId, onBack, onAnalysisComp
       .filter((f) => {
         if (fileType === 'erd') {
           return f.file_type === 'erd_image' || f.file_type === 'user_story';
-        } else {
-          return f.file_type === 'code' || f.file_type === 'config';
         }
+        return isQualityAnalysisFile(f);
       })
       .map((f) => f.id);
 
@@ -576,7 +581,7 @@ export default function RepositoryBrowser({ repositoryId, onBack, onAnalysisComp
               return { ...f, [field]: selected };
             }
           }
-          if (fileType === 'integrity' && (f.file_type === 'code' || f.file_type === 'config')) {
+          if (fileType === 'integrity' && isQualityAnalysisFile(f)) {
             if (!explicitFileIds || explicitFileIds.includes(f.id)) {
               return { ...f, [field]: selected };
             }
@@ -610,15 +615,15 @@ export default function RepositoryBrowser({ repositoryId, onBack, onAnalysisComp
           is_selected_erd:
             f.file_type === 'erd_image' || f.file_type === 'user_story' ? false : f.is_selected_erd,
           is_selected_integrity:
-            f.file_type === 'code' || f.file_type === 'config' ? false : f.is_selected_integrity,
+            isQualityAnalysisFile(f) ? false : f.is_selected_integrity,
           is_selected_compliance:
-            f.file_type === 'code' || f.file_type === 'config' ? false : f.is_selected_compliance,
+            isQualityAnalysisFile(f) ? false : f.is_selected_compliance,
           is_selected_correctness:
-            f.file_type === 'code' || f.file_type === 'config' ? false : f.is_selected_correctness,
+            isQualityAnalysisFile(f) ? false : f.is_selected_correctness,
           is_selected_usability:
-            f.file_type === 'code' || f.file_type === 'config' ? false : f.is_selected_usability,
+            isQualityAnalysisFile(f) ? false : f.is_selected_usability,
           is_selected_maintainability:
-            f.file_type === 'code' || f.file_type === 'config' ? false : f.is_selected_maintainability,
+            isQualityAnalysisFile(f) ? false : f.is_selected_maintainability,
         })),
       }));
     } catch (err) {
@@ -647,15 +652,15 @@ export default function RepositoryBrowser({ repositoryId, onBack, onAnalysisComp
           is_selected_erd:
             f.file_type === 'erd_image' || f.file_type === 'user_story' ? false : f.is_selected_erd,
           is_selected_integrity:
-            f.file_type === 'code' || f.file_type === 'config' ? false : f.is_selected_integrity,
+            isQualityAnalysisFile(f) ? false : f.is_selected_integrity,
           is_selected_compliance:
-            f.file_type === 'code' || f.file_type === 'config' ? false : f.is_selected_compliance,
+            isQualityAnalysisFile(f) ? false : f.is_selected_compliance,
           is_selected_correctness:
-            f.file_type === 'code' || f.file_type === 'config' ? false : f.is_selected_correctness,
+            isQualityAnalysisFile(f) ? false : f.is_selected_correctness,
           is_selected_usability:
-            f.file_type === 'code' || f.file_type === 'config' ? false : f.is_selected_usability,
+            isQualityAnalysisFile(f) ? false : f.is_selected_usability,
           is_selected_maintainability:
-            f.file_type === 'code' || f.file_type === 'config' ? false : f.is_selected_maintainability,
+            isQualityAnalysisFile(f) ? false : f.is_selected_maintainability,
         })),
       }));
     } catch (err) {
@@ -773,9 +778,7 @@ export default function RepositoryBrowser({ repositoryId, onBack, onAnalysisComp
   const erdFiles = repository.discovered_files?.filter(
     (f) => f.file_type === 'erd_image' || f.file_type === 'user_story'
   ) || [];
-  const integrityFiles = repository.discovered_files?.filter(
-    (f) => f.file_type === 'code' || f.file_type === 'config'
-  ) || [];
+  const integrityFiles = repository.discovered_files?.filter(isQualityAnalysisFile) || [];
 
   const selectedErdCount = erdFiles.filter((f) => f.is_selected_erd).length;
   const selectedIntegrityCount = integrityFiles.filter((f) => f.is_selected_integrity).length;
@@ -918,7 +921,7 @@ export default function RepositoryBrowser({ repositoryId, onBack, onAnalysisComp
                   <div style={styles.section}>
                     <h3 style={styles.sectionTitle}>
                       <span style={styles.sectionIcon}>&#128274;</span>
-                      Code Analysis Files ({selectedIntegrityCount} selected for Integrity)
+                      Analysis Files ({selectedIntegrityCount} selected for Integrity)
                     </h3>
                     <FileList
                       files={integrityFiles}
